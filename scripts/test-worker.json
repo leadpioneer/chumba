@@ -1,0 +1,11 @@
+{
+  "model": "worker",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Ответь одним словом: ок"
+    }
+  ],
+  "max_tokens": 256,
+  "temperature": 0.1
+}

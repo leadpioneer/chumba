@@ -1,0 +1,5 @@
+{
+  "cmd": "request.get",
+  "url": "https://nowsecure.nl",
+  "maxTimeout": 60000
+}

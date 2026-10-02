@@ -1,0 +1,11 @@
+{
+  "model": "orchestrator",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Ответь одним коротким предложением: столица Франции?"
+    }
+  ],
+  "max_tokens": 128,
+  "temperature": 0.1
+}
