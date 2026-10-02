@@ -1,0 +1,27 @@
+# LiteLLM: единый OpenAI-совместимый фасад с алиасами.
+# URL, ключи и id моделей приходят ТОЛЬКО из .env (os.environ/...).
+
+model_list:
+  # Облачный воркер (любой OpenAI-совместимый роутер: RouterAI, DeepSeek, OpenRouter...)
+  - model_name: worker
+    litellm_params:
+      model: os.environ/WORKER_MODEL
+      api_base: os.environ/WORKER_BASE_URL
+      api_key: os.environ/WORKER_API_KEY
+
+  # Локальный воркер: тот же llama-server — полная подмена без правок кода
+  - model_name: worker-local
+    litellm_params:
+      model: os.environ/WORKER_LOCAL_MODEL
+      api_base: os.environ/WORKER_LOCAL_BASE_URL
+      api_key: os.environ/WORKER_LOCAL_API_KEY
+
+  # Локальный оркестратор как OpenAI-совместимая модель
+  - model_name: orchestrator
+    litellm_params:
+      model: openai/orchestrator
+      api_base: http://llama-server:8080/v1
+      api_key: none
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
