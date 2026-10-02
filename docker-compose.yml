@@ -1,0 +1,324 @@
+name: chumba
+
+services:
+  llama-server:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda13}
+    container_name: chumba-llama-server
+    restart: unless-stopped
+    gpus: all
+    volumes:
+      - ./models:/models:ro
+      - ./llama/models.ini:/etc/llama/models.ini:ro
+    environment:
+      # LLAMA_ARG_* читает сам llama-server; CLI-аргументы имеют приоритет над env
+      - LLAMA_ARG_KV_OFFLOAD=${LLAMA_ARG_KV_OFFLOAD:-true}
+    networks:
+      - llm_internal
+    command:
+      # Router-режим: id модели = [orchestrator] в llama/models.ini; список моделей
+      # отвечает даже когда модель выгружена (сон), поэтому Open WebUI не теряет её.
+      - --models-preset
+      - /etc/llama/models.ini
+      - -c
+      - "${ORCHESTRATOR_CTX:-16384}"
+      - -ngl
+      - "${ORCHESTRATOR_NGL:-99}"
+      - -fa
+      - "${FLASH_ATTN:-on}"
+      - -np
+      - "${ORCHESTRATOR_PARALLEL:-1}"
+      - -ctk
+      - "${KV_K:-q4_0}"
+      - -ctv
+      - "${KV_V:-q4_0}"
+      - --jinja
+      - --chat-template-kwargs
+      - '{"enable_thinking": ${ENABLE_THINKING:-true}}'
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --sleep-idle-seconds
+      - "${SLEEP_IDLE_SECONDS:-600}"
+
+  # Публикация host-порта для internal-only сервиса.
+  # Docker Desktop (WSL2) не публикует порты контейнеров, подключённых ТОЛЬКО
+  # к internal-сети, поэтому host-порт отдаёт тонкий TCP-форвардер (socat),
+  # а llama-server остаётся без маршрута в интернет.
+  llama-port:
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
+    container_name: chumba-llama-port
+    restart: unless-stopped
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:llama-server:8080
+    ports:
+      - "127.0.0.1:${LLAMA_PORT:-8080}:8080"
+    networks:
+      - llm_internal
+      - edge
+    depends_on:
+      - llama-server
+
+  # Tor SOCKS5. ВНИМАНИЕ: в сетях с DPI-блокировкой Tor не поднимается без мостов
+  # (bootstrap застревает на 10%), поэтому сервис за профилем и по умолчанию не стартует:
+  #   docker compose --profile tor up -d tor   +   SEARXNG_PROXY=socks5h://tor:9150
+  tor:
+    image: ${TOR_IMAGE:-peterdavehello/tor-socks-proxy:latest}
+    container_name: chumba-tor
+    restart: unless-stopped
+    profiles: ["tor"]
+    ports:
+      - "127.0.0.1:${TOR_PORT:-9050}:9150"
+    networks:
+      - egress
+
+  # Byparr: stealth-браузер (Camoufox) для web_url_read — сглаживает антибот-проверки.
+  # Читает напрямую с домашнего IP (BYPARR_PROXY пусто; можно вписать прокси).
+  byparr:
+    image: ${BYPARR_IMAGE:-ghcr.io/thephaseless/byparr:latest}
+    container_name: chumba-byparr
+    restart: unless-stopped
+    shm_size: 512m
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - LOG_LEVEL=info
+      - PROXY_SERVER=${BYPARR_PROXY:-}
+    networks:
+      - egress
+
+  # Инициализация конфига SearXNG: рендер settings.yml из шаблона.
+  # Нужен, т.к. SearXNG не поддерживает env-подстановку для outgoing.proxies.
+  searxng-init:
+    image: ${ALPINE_IMAGE:-alpine:3.20}
+    container_name: chumba-searxng-init
+    command: ["sh", "/render.sh"]
+    environment:
+      - OUTBOUND_PROXY=${SEARXNG_PROXY:-}
+    volumes:
+      - ./searxng/settings.yml.template:/template/settings.yml.template:ro
+      - ./searxng/render.sh:/render.sh:ro
+      - ./searxng/core-config:/out
+    network_mode: "none"
+    restart: "no"
+
+  searxng:
+    image: ${SEARXNG_IMAGE:-docker.io/searxng/searxng:latest}
+    container_name: chumba-searxng
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      searxng-init:
+        condition: service_completed_successfully
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+      - SEARXNG_BASE_URL=http://127.0.0.1:${SEARXNG_PORT:-8888}/
+      - FORCE_OWNERSHIP=true
+    volumes:
+      - ./searxng/core-config:/etc/searxng
+      - searxng-data:/var/cache/searxng
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+    networks:
+      - llm_internal
+      - egress
+
+  litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-latest}
+    container_name: chumba-litellm
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      - WORKER_MODEL=${WORKER_MODEL}
+      - WORKER_BASE_URL=${WORKER_BASE_URL}
+      - WORKER_API_KEY=${WORKER_API_KEY}
+      - WORKER_LOCAL_MODEL=${WORKER_LOCAL_MODEL}
+      - WORKER_LOCAL_BASE_URL=${WORKER_LOCAL_BASE_URL}
+      - WORKER_LOCAL_API_KEY=${WORKER_LOCAL_API_KEY}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    networks:
+      - llm_internal
+      - egress
+    depends_on:
+      - llama-server
+
+  # MCP-сервер поиска/чтения страниц (SearXNG + web_url_read), HTTP-режим.
+  search-mcp:
+    image: ${SEARCHMCP_IMAGE:-isokoliuk/mcp-searxng:latest}
+    container_name: chumba-search-mcp
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - MCP_HTTP_PORT=8080
+      - MCP_HTTP_HOST=0.0.0.0
+      - MCP_HTTP_HARDEN=true
+      - MCP_HTTP_AUTH_TOKEN=${SEARCH_MCP_TOKEN}
+      - MCP_HTTP_ALLOWED_HOSTS=search-mcp:8080,127.0.0.1:8080,localhost:8080,127.0.0.1:${SEARCHMCP_PORT:-8085},localhost:${SEARCHMCP_PORT:-8085}
+      - MCP_HTTP_ALLOWED_ORIGINS=http://127.0.0.1:${OPENWEBUI_PORT:-3000},http://localhost:${OPENWEBUI_PORT:-3000}
+      - SEARXNG_URL=http://searxng:8080
+      - SEARXNG_LITE_TOOLS=true
+      - SEARXNG_MAX_RESULTS=${SEARXNG_MAX_RESULTS:-4}
+      - URL_READ_MAX_CHARS=${URL_READ_MAX_CHARS:-8000}
+      - URL_READER_HTTP_PROXY=${URL_READER_PROXY:-}
+      - URL_READER_HTTPS_PROXY=${URL_READER_PROXY:-}
+      - BYPARR_URL=http://byparr:8191
+      - BYPARR_TIMEOUT_SECONDS=120
+      - BYPARR_MAX_CONCURRENT_REQUESTS=2
+      - FETCH_TIMEOUT_MS=30000
+      - SEARXNG_TIMEOUT_MS=30000
+      - NO_PROXY=searxng,llama-server,litellm,delegate,byparr,localhost,127.0.0.1
+    ports:
+      - "127.0.0.1:${SEARCHMCP_PORT:-8085}:8080"
+    networks:
+      - llm_internal
+      - egress
+    depends_on:
+      - searxng
+      - byparr
+
+  # Тонкий MCP-сервис делегирования: локальный поиск/чтение -> воркер -> JSON.
+  delegate:
+    build: ./delegate
+    container_name: chumba-delegate
+    restart: unless-stopped
+    environment:
+      - SEARCH_MCP_URL=http://search-mcp:8080/mcp
+      - SEARCH_MCP_TOKEN=${SEARCH_MCP_TOKEN}
+      - SEARXNG_URL=http://searxng:8080
+      - DELEGATE_WORKER_URL=http://litellm:4000/v1
+      - DELEGATE_WORKER_MODEL=${DELEGATE_WORKER_MODEL:-worker}
+      - DELEGATE_WORKER_API_KEY=${LITELLM_MASTER_KEY}
+      - WORKER_MAX_SOURCE_TOKENS=${WORKER_MAX_SOURCE_TOKENS:-3000}
+      - WORKER_MAX_RESULT_TOKENS=${WORKER_MAX_RESULT_TOKENS:-800}
+      - SEARCH_RESULTS_COUNT=${SEARCH_RESULTS_COUNT:-4}
+      - URL_READ_MAX_CHARS=${URL_READ_MAX_CHARS:-8000}
+      - DELEGATE_TASK_MAX_CHARS=${DELEGATE_TASK_MAX_CHARS:-1000}
+      - DELEGATE_READ_TOP=${DELEGATE_READ_TOP:-2}
+      - DELEGATE_SANITIZE=${DELEGATE_SANITIZE:-llm}
+      - DELEGATE_SANITIZE_URL=http://llama-server:8080/v1
+      - DELEGATE_SANITIZE_MODEL=orchestrator
+      - DELEGATE_SANITIZE_MAX_CHARS=${DELEGATE_SANITIZE_MAX_CHARS:-300}
+      - DELEGATE_SANITIZE_FAIL=${DELEGATE_SANITIZE_FAIL:-reject}
+      - OUTBOUND_LOG_DIR=/logs/outbound
+    volumes:
+      - ./logs:/logs
+    networks:
+      - llm_internal
+    depends_on:
+      - litellm
+      - search-mcp
+
+  # Публикация host-порта delegate (internal-only) через socat.
+  delegate-port:
+    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    container_name: chumba-delegate-port
+    restart: unless-stopped
+    command: TCP-LISTEN:8000,fork,reuseaddr TCP:delegate:8000
+    ports:
+      - "127.0.0.1:${DELEGATE_PORT:-8086}:8000"
+    networks:
+      - llm_internal
+      - edge
+    depends_on:
+      - delegate
+
+  # Интерфейс: Open WebUI (internal-only; host-порт отдаёт socat).
+  # MCP-серверы добавляются админом в Settings > Admin > Integrations.
+  open-webui:
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    container_name: chumba-open-webui
+    restart: unless-stopped
+    environment:
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_AUTH=${WEBUI_AUTH:-true}
+      - WEBUI_ADMIN_EMAIL=${WEBUI_ADMIN_EMAIL}
+      - WEBUI_ADMIN_PASSWORD=${WEBUI_ADMIN_PASSWORD}
+      - WEBUI_ADMIN_NAME=${WEBUI_ADMIN_NAME:-Admin}
+      - OPENAI_API_BASE_URL=http://llama-server:8080/v1
+      - OPENAI_API_KEY=none
+      - MCP_INITIALIZE_TIMEOUT=30
+      - CHAT_RESPONSE_MAX_TOOL_CALL_ITERATIONS=12
+      - RAG_EMBEDDING_ENGINE=openai
+      - RAG_OPENAI_API_BASE_URL=http://embeddings:8080/v1
+      - RAG_OPENAI_API_KEY=none
+      - RAG_EMBEDDING_MODEL=bge-m3
+      - RAG_TOP_K=${RAG_TOP_K:-4}
+      - RAG_EMBEDDING_CONCURRENT_REQUESTS=2
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - llm_internal
+    depends_on:
+      - llama-server
+
+  # Публикация host-порта Open WebUI (internal-only) через socat.
+  openwebui-port:
+    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    container_name: chumba-openwebui-port
+    restart: unless-stopped
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:open-webui:8080
+    ports:
+      - "127.0.0.1:${OPENWEBUI_PORT:-3000}:8080"
+    networks:
+      - llm_internal
+      - edge
+    depends_on:
+      - delegate
+
+  # Эмбеддинги для RAG: bge-m3 (мультиязычная, MIT), CPU, /v1/embeddings
+  embeddings:
+    image: ${EMBEDDINGS_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    container_name: chumba-embeddings
+    restart: unless-stopped
+    volumes:
+      - ./models/embeddings:/models/embeddings:ro
+    networks:
+      - llm_internal
+    command:
+      - -m
+      - /models/embeddings/${EMBEDDINGS_MODEL_FILE:-bge-m3-Q8_0.gguf}
+      - --embeddings
+      - --pooling
+      - cls
+      - -c
+      - "8192"
+      - -ngl
+      - "0"
+      - -np
+      - "2"
+      - --no-webui
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+
+  embeddings-port:
+    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    container_name: chumba-embeddings-port
+    restart: unless-stopped
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:embeddings:8080
+    ports:
+      - "127.0.0.1:${EMBEDDINGS_PORT:-8087}:8080"
+    networks:
+      - llm_internal
+      - edge
+    depends_on:
+      - embeddings
+
+volumes:
+  searxng-data:
+  open-webui-data:
+
+networks:
+  llm_internal:
+    internal: true
+  edge: {}
+  egress: {}
