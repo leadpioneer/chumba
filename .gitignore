@@ -1,0 +1,8 @@
+.env
+.env.bak*
+models/
+logs/
+*.gguf
+*.log
+__pycache__/
+searxng/core-config/
