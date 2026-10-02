@@ -1,0 +1,37 @@
+# SearXNG settings (шаблон; рендерится init-контейнером в core-config/settings.yml).
+# Секции ниже переопределяют значения по умолчанию (use_default_settings: true).
+# server.secret_key передаётся через env SEARXNG_SECRET (официальная переменная).
+
+use_default_settings: true
+
+general:
+  instance_name: "chumba"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+
+engines:
+  # Резервные general-движки: основные (brave/ddg/google cse) периодически
+  # упираются в rate-limit/CAPTCHA — при отказе поиск не должен умирать целиком.
+  - name: bing
+    disabled: false
+  - name: mwmbl
+    disabled: false
+  - name: yandex
+    disabled: false
+  - name: yep
+    disabled: false
+
+# Секция outgoing рендерится: __OUTGOING_PLACEHOLDER__
