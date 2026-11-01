@@ -1,0 +1,57 @@
+name: chumba-context-exp
+
+services:
+  llama-server-exp:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda13@sha256:8c27804e7dd79c758d8e56722c2e393bfa32599e83d79f663e9e5ff8ac3b494f}
+    container_name: chumba-llama-exp
+    restart: "no"
+    gpus: all
+    volumes:
+      - ../../models:/models:ro
+      - ../../llama/models.ini:/etc/llama/models.ini:ro
+    environment:
+      - LLAMA_ARG_KV_OFFLOAD=${EXP_KV_OFFLOAD:-true}
+    networks:
+      - ctx_exp_internal
+    command:
+      - --models-preset
+      - /etc/llama/models.ini
+      - -c
+      - "${EXP_CTX:-65536}"
+      - -ngl
+      - "${EXP_NGL:-99}"
+      - -fa
+      - "${EXP_FA:-on}"
+      - -np
+      - "${EXP_PARALLEL:-1}"
+      - -ctk
+      - "${EXP_KV_K:-q4_0}"
+      - -ctv
+      - "${EXP_KV_V:-q4_0}"
+      - --jinja
+      - --chat-template-kwargs
+      - '{"enable_thinking": ${EXP_ENABLE_THINKING:-true}}'
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --sleep-idle-seconds
+      - "${EXP_SLEEP_IDLE_SECONDS:--1}"
+
+  llama-exp-port:
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
+    container_name: chumba-llama-exp-port
+    restart: "no"
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:llama-server-exp:8080
+    ports:
+      - "127.0.0.1:${EXP_PORT:-8090}:8080"
+    networks:
+      - ctx_exp_internal
+      - ctx_exp_edge
+    depends_on:
+      - llama-server-exp
+
+networks:
+  ctx_exp_internal:
+    internal: true
+  ctx_exp_edge: {}

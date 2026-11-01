@@ -1,0 +1,47 @@
+{
+  "description": "Safe synthetic tools. They have no side effects; the benchmark client computes the result locally.",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_project_code",
+        "description": "Return the reserved code of a project. Read-only and side-effect free.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "Exact project name, for example Кобальт-77."
+            }
+          },
+          "required": ["project"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "add_numbers",
+        "description": "Add two integers. Read-only and side-effect free.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": {"type": "integer"},
+            "b": {"type": "integer"}
+          },
+          "required": ["a", "b"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "project_codes": {
+    "Кобальт-77": "4183",
+    "Ирис-12": "9071",
+    "Оникс-5": "2654"
+  },
+  "prompt": "В журнале есть проект «Кобальт-77». Узнай его резервный код инструментом lookup_project_code и сложи 17 и 25 инструментом add_numbers. Затем одной строкой верни код проекта и сумму.",
+  "expected_code": "4183",
+  "expected_sum": 42
+}

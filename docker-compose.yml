@@ -230,10 +230,68 @@ services:
     depends_on:
       - delegate
 
+  # MCP-сервис учебного прогресса и интервального повторения (репетитор).
+  # Локальная SQLite в томе study-data; egress отсутствует (только llm_internal).
+  study:
+    build: ./study
+    container_name: chumba-study
+    restart: unless-stopped
+    environment:
+      - STUDY_DB_PATH=/data/study.db
+      - STUDY_SYLLABUS_PATH=/app/syllabus.json
+      - STUDY_RETIRE_STREAK=${STUDY_RETIRE_STREAK:-3}
+    volumes:
+      - ./study/syllabus.json:/app/syllabus.json:ro
+      - study-data:/data
+    networks:
+      - llm_internal
+
+  # Публикация host-порта study (internal-only) через socat.
+  study-port:
+    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    container_name: chumba-study-port
+    restart: unless-stopped
+    command: TCP-LISTEN:8000,fork,reuseaddr TCP:study:8000
+    ports:
+      - "127.0.0.1:${STUDY_PORT:-8088}:8000"
+    networks:
+      - llm_internal
+      - edge
+    depends_on:
+      - study
+
   # Интерфейс: Open WebUI (internal-only; host-порт отдаёт socat).
   # MCP-серверы добавляются админом в Settings > Admin > Integrations.
+  # Экспериментальный notes-сервис: Markdown + SQLite FTS5, HTTP API для UI
+  # и MCP для агента. В браузер напрямую не публикуется.
+  notes:
+    build: ./notes
+    image: chumba-notes:local
+    container_name: chumba-notes
+    restart: unless-stopped
+    environment:
+      - NOTES_DATA_DIR=/data
+      - NOTES_INTERNAL_TOKEN=${NOTES_INTERNAL_TOKEN:?set NOTES_INTERNAL_TOKEN}
+      - NOTES_AGENT_TOKEN=${NOTES_AGENT_TOKEN:?set NOTES_AGENT_TOKEN}
+    volumes:
+      - notes-data:/data
+    networks:
+      - llm_internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Патченный OWUI: /memory и same-origin proxy; base image остаётся pinned,
+  # frontend собирается из pinned source с автоматическим patch.
   open-webui:
-    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    image: ${OPENWEBUI_MEMORY_IMAGE:-chumba-open-webui-memory:local}
+    build:
+      context: ./openwebui
+      args:
+        BASE_IMAGE: ${OPENWEBUI_BASE_IMAGE:-ghcr.io/open-webui/open-webui@sha256:8b432fe0a65b91116afc7961365c6cca5379cc923171386a96691f3471f3cae9}
+        UPSTREAM_REV: ${OPENWEBUI_REV:-8bd8b4fac5e059578ac0c74b3c18d11139f88b7d}
     container_name: chumba-open-webui
     restart: unless-stopped
     environment:
@@ -252,12 +310,40 @@ services:
       - RAG_EMBEDDING_MODEL=bge-m3
       - RAG_TOP_K=${RAG_TOP_K:-4}
       - RAG_EMBEDDING_CONCURRENT_REQUESTS=2
+      - NOTES_API_URL=http://notes:8080
+      - NOTES_INTERNAL_TOKEN=${NOTES_INTERNAL_TOKEN:?set NOTES_INTERNAL_TOKEN}
     volumes:
       - open-webui-data:/app/backend/data
     networks:
       - llm_internal
     depends_on:
       - llama-server
+      - notes
+
+  # Одноразовая идемпотентная инициализация: notes MCP + seed-документация.
+  # Не включает экспериментальную compaction/guard policy.
+  notes-config:
+    image: chumba-notes:local
+    container_name: chumba-notes-config
+    restart: "no"
+    entrypoint: ["python", "/app/configure_memory_integration.py"]
+    environment:
+      - OWUI_URL=http://open-webui:8080
+      - WEBUI_ADMIN_EMAIL=${WEBUI_ADMIN_EMAIL}
+      - WEBUI_ADMIN_PASSWORD=${WEBUI_ADMIN_PASSWORD}
+      - NOTES_AGENT_TOKEN=${NOTES_AGENT_TOKEN:?set NOTES_AGENT_TOKEN}
+      - NOTES_MCP_URL=http://notes:8080/mcp
+      - SEED_DIR=/seed
+    volumes:
+      - ./scripts/configure_memory_integration.py:/app/configure_memory_integration.py:ro
+      - ./notes/seed/chumba:/seed:rw
+    networks:
+      - llm_internal
+    depends_on:
+      notes:
+        condition: service_healthy
+      open-webui:
+        condition: service_started
 
   # Публикация host-порта Open WebUI (internal-only) через socat.
   openwebui-port:
@@ -316,6 +402,9 @@ services:
 volumes:
   searxng-data:
   open-webui-data:
+  study-data:
+  notes-data:
+    name: chumba-notes-data
 
 networks:
   llm_internal:

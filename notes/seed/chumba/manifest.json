@@ -1,0 +1,102 @@
+{
+  "seed-architecture": {
+    "content_sha256": "aee522f7137d4ecb33105d9377a9667f22df2d92211d21c73ca8cdc7d34e6249",
+    "revision": "37d8f9b0df72d7acb9d6410cc839a98db3179e74184247e7edcbfc68abc8af24"
+  },
+  "seed-chumba-map": {
+    "content_sha256": "c040a6c32a8c45955e87764180efcc40f403beb599b0e0fc9ca8cc200435f620",
+    "revision": "ff50311c9e4e3f5ccadcefefdf18e4fdfb9a246007402d3fc790f2b7c6fc9bb8"
+  },
+  "seed-compaction-guard": {
+    "content_sha256": "87fe9126326af0c1190749d9004c198a6be7f34883856817f6a60b32247b2579",
+    "revision": "28b85cc3a3e645cdb855b93229b76cfe6de289062c1535d6b42004e5c399644e"
+  },
+  "seed-context": {
+    "content_sha256": "ca18e194eef5ffff0a62fb6c69ebe11d441e18c7cc03f342a87f7f64cc82463f",
+    "revision": "656ce7cea49e4ef92a42908946948275cf65555d80cf32333b96f764617b3761"
+  },
+  "seed-decisions": {
+    "content_sha256": "2d772ad15097394b30d0ae171681b1e1a7743a472ac6d44a6695a44ea993cc79",
+    "revision": "a80f6734dfd2c9634aa761db2e9334dca8e185afc4fbc31979694611aa583eb0"
+  },
+  "seed-experiment-context-expansion": {
+    "content_sha256": "ff9db0e8b2173d4937efc87363ce9830c382a1c077fd1ba5dd6d0df8edf6e578",
+    "revision": "bd5ea7b2052ab6ad3fe5376abd83147cbcf0c1a36d114b90913dfcdbf0bc9bda"
+  },
+  "seed-experiment-notes-mvp": {
+    "content_sha256": "e616aabd32d322c7d593d223de1c8f13a14d6714a292733bad0c6fbf7c2ce583",
+    "revision": "13aa3ebf34844c5ed8d1f00a11b958c92fe98c5bdf366338818df0ed6b644879"
+  },
+  "seed-experiment-regression": {
+    "content_sha256": "13c12e8fcb12d8c02b5b3c3076268bc213936f5f728bc93c53cbd48dd4c89e0e",
+    "revision": "dd3af162e493519acbde35c3dc8721bca39df8ad77e742d2a6a9799646c7cfcf"
+  },
+  "seed-inference": {
+    "content_sha256": "7505ca11f4bd6bbcb06766d0f4a23f6c0d5092936bf210a70454b4a5fbb36a99",
+    "revision": "85ba865a474ef322da76f5255d1045f932c438dcf230ef8397f95e3b58f34c70"
+  },
+  "seed-limitations": {
+    "content_sha256": "0ec9c2ce9222eb4b5397990034c38cc87a4ab0b48afaadd8ed22d37247eb6689",
+    "revision": "fa89603f8015b0da7790add90c1dd9d6a65e7a77530165f12109a766a4941ed3"
+  },
+  "seed-map-architecture": {
+    "content_sha256": "8ee5cd47c703e856fc49d4f9de2439fdd3b670c367c815382ba337725f41e723",
+    "revision": "152118ef7f519b9971a8e54363399fd2cbdc471ebfa0e0e863099a63baa0880a"
+  },
+  "seed-map-experiments": {
+    "content_sha256": "79ed5a6a61c981d0e25dd316e38e7a921e2ef6437d4e772d90b3f198ddb87ac4",
+    "revision": "652d0331c5e45336b54fcc99fc88e1812913ed879b1076c93bf86e01290526cf"
+  },
+  "seed-map-memory": {
+    "content_sha256": "54dd17918d6b6ccdf4469008401c05cab2d4483bd51d42970ab4fcfc76174378",
+    "revision": "7749ca98fe9e28d7060a83115aa3f6d774b44536280f7907ad30252207c905df"
+  },
+  "seed-map-operations": {
+    "content_sha256": "e13795c750dbc323721d8ba784f424d8c4920e4ee9e6a75d17bbe6cf83c355a3",
+    "revision": "13a0cb2cc04a79816d0cd371ae68439078ad1c85b01ccb7e7e47b2d0992eb1d9"
+  },
+  "seed-network-privacy": {
+    "content_sha256": "96b5a9a4a4250b2f48e53977d8e7cb95d21d679a636ffe03ccd8659307c75a4b",
+    "revision": "330ba4b661b19d7eab9faf1dc3413b76fe8b914347bdf1635c17c37304468d45"
+  },
+  "seed-notes-service": {
+    "content_sha256": "f176c1acf0afa624fa5ba3d9a624bb0bb7bedcc05907dd13aa0b5b36ad2c7593",
+    "revision": "5e42d480d8832a5a27388546f9f1786787fa929ade8fb94bb8ebb49757d911a9"
+  },
+  "seed-operations": {
+    "content_sha256": "465e79bee6066ddcb39e8bd7f8d266e9d5acf2153508575db9c99603c38ffd9a",
+    "revision": "53106a7bae73e0ccd614d736b21f1d7b9d5ffa6525debce6413cb4e135668631"
+  },
+  "seed-request-path": {
+    "content_sha256": "ce82cbae5c01724afba1b5fb07df458c17d7dbda0c85a5740404a10522d2da06",
+    "revision": "50a58bd706da2678ba9874b0aec49795b526a3a6ed7d04b8fedb90f1d95693aa"
+  },
+  "seed-routing": {
+    "content_sha256": "6e044b04bf35b916a608ae5ea9b99c65ea3b163f244c0aef6754d59858823fc1",
+    "revision": "11ade19c88d5b314e57633645ea482d871a8c947861bdb372d2a6846b15e15f7"
+  },
+  "seed-search-embeddings": {
+    "content_sha256": "7b7a902c7db4a8d439229871083e5e5e73cb97772aad1578f005fb45d12b02bd",
+    "revision": "fb7b5cb749bec312ba6f82ba5553edf5acbdac7edb32449f171802417df3e5e7"
+  },
+  "seed-services": {
+    "content_sha256": "cdbbe00f7ca85521f163826581ed52bf62c5ef5cbaef20eccf121bd6831e64e4",
+    "revision": "fdafef3a3ef1a015c15e554d9e9b168e8e9d9ec7bc6f904f9f1cc8b48b445836"
+  },
+  "seed-storage-volumes": {
+    "content_sha256": "a2393f509941d5283833e67205825679203ce1496e70278705053a434b0ef1a4",
+    "revision": "e9ce910484403675a642cd4c3d7c298f5f1453e8c7799996a86f8c5f4702ff35"
+  },
+  "seed-testing": {
+    "content_sha256": "7c16ac957696e6fa5f1ae5a6520b77e6209ee04d2708e3e99e19389b9f34908a",
+    "revision": "a1cc2bc0b64629bf31a143c6e5862900971dd7d1514066bfc90ea4f8930b81b9"
+  },
+  "seed-tools-mcp": {
+    "content_sha256": "4ad11b6db797ed454493a7aa5d183616dd5ca617fdb5778689f64b1c67253052",
+    "revision": "dcc93741b494f3a2a9e0b4e6311edd07b6a095cf9e71b2fe99e67d9080bf9613"
+  },
+  "seed-ui-patch": {
+    "content_sha256": "06338794d9ff568846281abe4d21b159fe9f6ee6d231ff94a77020b8f22a4ad5",
+    "revision": "22c64c4dfc9738bae2687bb7e9e834e72fa039e6eaad28169b8fc5a1139e1659"
+  }
+}

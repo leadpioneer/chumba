@@ -94,6 +94,7 @@
 | search-mcp | 8085 | MCP: `searxng_web_search`, `web_url_read` (Bearer) |
 | delegate | 8086 | MCP: `delegate_to_worker(task, urls, max_sources)` |
 | embeddings | 8087 | Локальные эмбеддинги bge-m3 (CPU) для RAG |
+| study | 8088 | MCP: `study_topics/plan/due/record/progress/task` (учебный прогресс, локально) |
 | byparr | — | Stealth-браузер (Camoufox) для чтения страниц; только `egress` |
 | tor | 9050 | SOCKS5 для SearXNG; профиль `tor`, по умолчанию выключен |
 
@@ -157,10 +158,12 @@ docker compose ps
 Восстановление одной командой на каждый слой:
 
 ```powershell
-python scripts\webui_add_mcp.py        # MCP-подключения search + delegate
+python scripts\webui_add_mcp.py        # MCP-подключения search + delegate + study
 python scripts\webui_rag_config.py     # движок эмбеддингов bge-m3 + TOP_K
 python scripts\webui_add_filter.py     # фильтр rolling summary (создание + активация)
 python scripts\webui_add_model.py      # модель chumba-orchestrator + DEFAULT_MODELS
+python scripts\study_ingest.py         # (репетитор) PDF по системному анализу -> Knowledge
+python scripts\webui_add_tutor_model.py  # (репетитор) модель chumba-tutor + Knowledge
 ```
 
 ---
@@ -242,6 +245,34 @@ docker compose up -d delegate
   `[orchestrator]` задаёт id модели). Поэтому `/v1/models` отвечает даже когда модель выгружена —
   Open WebUI не теряет `orchestrator`/`chumba-orchestrator` из списка (иначе после простоя
   UI показывал «Модель не найдена»).
+
+### 5.7 Репетитор по системному анализу (`chumba-tutor`)
+
+Локальный репетитор-экзаменатор: после того как вы прочитали тему, он проверяет вас — задаёт
+вопросы по одному, принимает свободный ответ, оценивает (`correct`/`partial`/`incorrect`),
+показывает верный ответ и источник, иногда даёт практическое задание и ведёт прогресс с
+интервальным повторением.
+
+Подготовка (один раз; база знаний по умолчанию `Системный анализ`):
+
+```powershell
+python scripts\study_ingest.py           # PDF из STUDY_DOCS_DIR -> Knowledge (RAG)
+python scripts\webui_add_tutor_model.py  # модель chumba-tutor + привязка Knowledge
+```
+
+Использование: в UI выберите модель **Chumba Tutor — Системный анализ** и напишите, например,
+«проверь меня по микросервисам» или «что мне проходить дальше». Модель по умолчанию
+(`chumba-orchestrator`) не меняется.
+
+- Прогресс и повторение хранит сервис `study` (SQLite в томе `study-data`):
+  `study_topics`, `study_plan`, `study_due`, `study_record`, `study_progress`, `study_task`.
+  Интервалы — как в memento: incorrect → +1 день, partial → +3 дня, correct → +7 дней;
+  `STUDY_RETIRE_STREAK` «correct» подряд убирают карточку из ротации.
+- Карта тем — `study/syllabus.json` (8 разделов; файлы-задания «Задание 1/2/3» используются как
+  банк практических заданий).
+- Приватность: материалы и чат не уходят наружу; `search`/`delegate` — только для пояснения
+  нейтральных внешних терминов (в облако идёт обезличенный запрос, не текст PDF).
+- Проверка сервиса: `python scripts\study_check.py`.
 
 ---
 
@@ -419,6 +450,9 @@ python scripts\embed_check.py
 | `webui_rag_config.py` | RAG-настройки (движок, TOP_K) |
 | `webui_add_filter.py` | установка/активация фильтра summary (+Valves) |
 | `webui_add_model.py` | создание/обновление `chumba-orchestrator` + DEFAULT_MODELS |
+| `study_ingest.py` | загрузка PDF по системному анализу в Knowledge Open WebUI (репетитор) |
+| `webui_add_tutor_model.py` | модель `chumba-tutor` + привязка базы знаний (репетитор) |
+| `study_check.py` | проверка MCP-сервиса `study` (запись → прогресс → повторение) |
 | `download-embedding-model.ps1` | скачать `bge-m3-Q8_0.gguf` |
 
 JSON-фикстуры (`scripts/*.json`) — тела запросов для `curl` и аргументы инструментов.
@@ -511,7 +545,7 @@ docker compose down -v         # ВНИМАНИЕ: удалит и тома (ч�
 ## 12. Структура репозитория
 
 ```
-docker-compose.yml          # весь стек (13 сервисов + 4 socat-форвардера)
+docker-compose.yml          # весь стек (сервисы, тома, socat-форвардеры портов)
 .env.example                # контракт переменных; копируется в .env (секреты)
 models/                     # GGUF оркестратора
 models/embeddings/          # bge-m3-Q8_0.gguf (RAG)
@@ -522,6 +556,7 @@ searxng/
   core-config/              # сгенерированный settings.yml (gitignore)
 litellm/config.yaml         # алиасы worker / worker-local / orchestrator
 delegate/                   # FastMCP-сервис delegate_to_worker (поиск, чтение, санитайзер, JSONL)
+study/                      # FastMCP-сервис учебного прогресса + study/syllabus.json (репетитор)
 openwebui/filters/          # chumba_summary_filter.py (rolling summary)
 testdata/                   # тестовый документ для RAG
 scripts/                    # тесты и провижининг (см. §8.2)
@@ -548,3 +583,42 @@ docs/decisions.md           # журнал инженерных решений �
 
 Идеи развития: RAG по истории чатов; reranker (`--rerank --pooling rank`); платный SERP API как
 дополнительный поисковый путь; obfs4/webtunnel-образ для Tor; onion-доступ к UI.
+
+
+## 8. Память: linked notes внутри Chumba
+
+Основной запуск включает notes-сервис и patched Open WebUI. Сборка
+воспроизводимая: `openwebui/Dockerfile` скачивает pinned upstream source,
+применяет `openwebui/owui-memory.patch`, собирает frontend и накладывает
+backend patch на pinned base image. Ручной `git apply` больше не нужен.
+
+```powershell
+docker compose up -d --build
+```
+
+Что поднимется дополнительно:
+
+- `notes` — Markdown + SQLite FTS5, volume `chumba-notes-data`, MCP и internal HTTP;
+- `open-webui` — локальный образ `chumba-open-webui-memory:local` с `/memory`;
+- `notes-config` — одноразовая идемпотентная настройка notes MCP и импорт
+  seed-документации; compaction/guard policy не включает.
+
+URL:
+
+- `http://127.0.0.1:3000/memory`
+- `http://127.0.0.1:3000/memory/seed-chumba-map`
+- `http://127.0.0.1:3000/memory/graph`
+
+Настройки в `.env`: `NOTES_INTERNAL_TOKEN`, `NOTES_AGENT_TOKEN`,
+`OPENWEBUI_MEMORY_IMAGE`, `OPENWEBUI_BASE_IMAGE`, `OPENWEBUI_REV`. Секреты не
+коммитятся. Notes MCP доступен агенту, но память не загружается автоматически;
+агент использует явные tool calls.
+
+Откат образа: остановить стек, задать
+`OPENWEBUI_MEMORY_IMAGE=ghcr.io/open-webui/open-webui@sha256:8b432fe0...f3cae9`
+и запустить без `--build`; notes-сервис можно оставить остановленным. Рабочий
+volume Open WebUI и активная compaction policy при этом не меняются.
+
+Seed-заметки: `notes/seed/chumba/`; импорт вручную:
+`python notes/seed/chumba/import_seed.py --url http://127.0.0.1:3000 --apply`.
+Backup notes: сохранить volume `chumba-notes-data` (Markdown, revisions, FTS).

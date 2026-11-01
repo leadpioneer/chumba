@@ -85,6 +85,21 @@ def main():
                 "description": "Делегирование узкой задачи облачному воркеру (JSON)",
             },
         },
+        {
+            "id": "mcp-study",
+            "type": "mcp",
+            "name": "study",
+            "url": "http://study:8000/mcp",
+            "path": "/mcp",
+            "auth_type": "none",
+            "key": "",
+            "config": {"enable": True},
+            "info": {
+                "id": "study",
+                "name": "study",
+                "description": "Учебный прогресс и повторение репетитора (SQLite, локально)",
+            },
+        },
     ]
     status, res = req("POST", "/api/v1/configs/tool_servers", token, {"TOOL_SERVER_CONNECTIONS": connections})
     print("POST tool_servers:", status, json.dumps(res, ensure_ascii=False)[:600] if isinstance(res, (dict, list)) else res)

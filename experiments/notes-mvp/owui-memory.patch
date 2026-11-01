@@ -1,0 +1,1212 @@
+diff --git a/Dockerfile b/Dockerfile
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -31,7 +31,7 @@
+ ARG GID
+ 
+ # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
+-# ENV NODE_OPTIONS="--max-old-space-size=4096"
++ENV NODE_OPTIONS="--max-old-space-size=8192"
+ 
+ WORKDIR /app
+ 
+diff --git a/backend/open_webui/main.py b/backend/open_webui/main.py
+--- a/backend/open_webui/main.py
++++ b/backend/open_webui/main.py
+@@ -163,6 +163,7 @@
+     images,
+     knowledge,
+     memories,
++    memory,
+     models,
+     notes,
+     notifications,
+@@ -860,6 +861,7 @@
+ app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
+ app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
+ app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
++app.include_router(memory.router, prefix='/api/v1/memory', tags=['memory'])
+ 
+ 
+ app.include_router(models.router, prefix='/api/v1/models', tags=['models'])
+diff --git a/backend/open_webui/routers/memory.py b/backend/open_webui/routers/memory.py
+new file mode 100644
+--- /dev/null
++++ b/backend/open_webui/routers/memory.py
+@@ -0,0 +1,56 @@
++from __future__ import annotations
++
++import os
++
++import httpx
++from fastapi import APIRouter, Depends, Request
++from fastapi.responses import JSONResponse, Response
++
++from open_webui.utils.auth import get_verified_user
++
++router = APIRouter()
++
++
++@router.api_route(
++    "/{path:path}",
++    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
++)
++async def memory_proxy(path: str, request: Request, user=Depends(get_verified_user)):
++    base = os.environ.get("NOTES_API_URL", "http://notes:8080").rstrip("/")
++    token = os.environ.get("NOTES_INTERNAL_TOKEN", "")
++    if not token:
++        return JSONResponse(
++            {"error": "memory_not_configured", "message": "NOTES_INTERNAL_TOKEN is not set"},
++            status_code=503,
++        )
++    headers = {
++        "Authorization": "Bearer " + token,
++        "X-Chumba-User": user.id,
++        "Accept": "application/json",
++    }
++    content_type = request.headers.get("content-type")
++    if content_type:
++        headers["Content-Type"] = content_type
++    body = await request.body() if request.method not in {"GET", "HEAD"} else None
++    try:
++        async with httpx.AsyncClient(timeout=60) as client:
++            upstream = await client.request(
++                request.method,
++                f"{base}/api/{path}",
++                params=request.query_params,
++                content=body,
++                headers=headers,
++            )
++    except httpx.HTTPError as exc:
++        return JSONResponse(
++            {"error": "memory_unavailable", "message": type(exc).__name__},
++            status_code=502,
++        )
++    response_headers = {}
++    if upstream.headers.get("content-type"):
++        response_headers["content-type"] = upstream.headers["content-type"]
++    return Response(
++        content=upstream.content,
++        status_code=upstream.status_code,
++        headers=response_headers,
++    )
+diff --git a/src/lib/components/layout/Sidebar.svelte b/src/lib/components/layout/Sidebar.svelte
+--- a/src/lib/components/layout/Sidebar.svelte
++++ b/src/lib/components/layout/Sidebar.svelte
+@@ -94,7 +94,7 @@
+ 	import MobileSwipePanel from '../common/MobileSwipePanel.svelte';
+ 
+ 	const BREAKPOINT = 768;
+-	const DEFAULT_PINNED_ITEMS = ['notes', 'workspace'];
++	const DEFAULT_PINNED_ITEMS = ['notes', 'memory', 'workspace'];
+ 
+ 	let scrollTop = 0;
+ 
+@@ -153,6 +153,9 @@
+ 	};
+ 
+ 	$: pinnedItems = $settings?.pinnedMenuItems ?? DEFAULT_PINNED_ITEMS;
++	$: if (Array.isArray(pinnedItems) && !pinnedItems.includes('memory')) {
++		pinnedItems = [...pinnedItems, 'memory'];
++	}
+ 
+ 	const isMenuItemVisible = (id) => {
+ 		switch (id) {
+@@ -161,6 +164,8 @@
+ 					($config?.features?.enable_notes ?? false) &&
+ 					($user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true))
+ 				);
++			case 'memory':
++				return $user?.role === 'admin' || ($user?.permissions?.features?.notes ?? true);
+ 			case 'workspace':
+ 				return (
+ 					$user?.role === 'admin' ||
+@@ -190,6 +195,7 @@
+ 	const getMenuItemMeta = (id) => {
+ 		const items = {
+ 			notes: { label: $i18n.t('Notes'), href: '/notes', iconType: 'note' },
++			memory: { label: $i18n.t('Memory'), href: '/memory', iconType: 'note' },
+ 			workspace: { label: $i18n.t('Workspace'), href: '/workspace', iconType: 'workspace' },
+ 			automations: { label: $i18n.t('Automations'), href: '/automations', iconType: 'automations' },
+ 			calendar: { label: $i18n.t('Calendar'), href: '/calendar', iconType: 'calendar' },
+@@ -200,6 +206,7 @@
+ 
+ 	const menuItemPathPrefixes = {
+ 		notes: '/notes',
++		memory: '/memory',
+ 		workspace: '/workspace',
+ 		calendar: '/calendar',
+ 		automations: '/automations',
+@@ -1051,7 +1058,7 @@
+ 													: 'bg-black/[0.035] dark:bg-white/[0.045]'
+ 												: 'group-hover:bg-gray-100 dark:group-hover:bg-gray-900'}"
+ 										>
+-											{#if itemId === 'notes'}
++											{#if itemId === 'notes' || itemId === 'memory'}
+ 												<NotesIcon className="size-4" strokeWidth="1.5" />
+ 											{:else if itemId === 'workspace'}
+ 												<WorkspaceIcon className="size-4" strokeWidth="1.5" />
+@@ -1273,7 +1280,7 @@
+ 											aria-label={$i18n.t(meta.label)}
+ 										>
+ 											<div class="self-center flex size-4 shrink-0 items-center justify-center">
+-												{#if itemId === 'notes'}
++												{#if itemId === 'notes' || itemId === 'memory'}
+ 													<NotesIcon className="size-4" strokeWidth="1.5" />
+ 												{:else if itemId === 'workspace'}
+ 													<WorkspaceIcon className="size-4" strokeWidth="1.5" />
+diff --git a/src/routes/(app)/+layout.svelte b/src/routes/(app)/+layout.svelte
+--- a/src/routes/(app)/+layout.svelte
++++ b/src/routes/(app)/+layout.svelte
+@@ -49,6 +49,24 @@
+ 	import { loadKeybindings, matchKeybinding, Shortcut } from '$lib/shortcuts';
+ 
+ 	const i18n = getContext('i18n');
++
++	const handleInternalMemoryLink = (event: MouseEvent) => {
++		if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
++			return;
++		}
++		const target = event.target as HTMLElement | null;
++		const anchor = target?.closest?.('a');
++		if (!anchor) return;
++		const href = anchor.getAttribute('href');
++		if (!href || !href.startsWith('/memory/')) return;
++		event.preventDefault();
++		goto(href);
++	};
++
++	onMount(() => {
++		document.addEventListener('click', handleInternalMemoryLink, true);
++		return () => document.removeEventListener('click', handleInternalMemoryLink, true);
++	});
+ 
+ 	let loaded = false;
+ 
+diff --git a/src/lib/apis/memory/index.ts b/src/lib/apis/memory/index.ts
+new file mode 100644
+--- /dev/null
++++ b/src/lib/apis/memory/index.ts
+@@ -0,0 +1,54 @@
++import { WEBUI_API_BASE_URL } from '$lib/constants';
++
++const BASE = `${WEBUI_API_BASE_URL}/memory`;
++
++const request = async (path: string, options: RequestInit = {}) => {
++	const token = typeof localStorage !== 'undefined' ? localStorage.token : '';
++	const res = await fetch(`${BASE}${path}`, {
++		...options,
++		headers: {
++			Accept: 'application/json',
++			'Content-Type': 'application/json',
++			...(token ? { authorization: `Bearer ${token}` } : {}),
++			...(options.headers || {})
++		}
++	});
++	const data = await res.json().catch(() => ({}));
++	if (!res.ok) {
++		throw { status: res.status, data };
++	}
++	return data;
++};
++
++export const listNotes = (query = '', limit = 50) =>
++	request(`/notes?q=${encodeURIComponent(query)}&limit=${limit}`);
++
++export const getNote = (id: string) => request(`/notes/${encodeURIComponent(id)}`);
++
++export const createNote = (payload: any) =>
++	request('/notes', { method: 'POST', body: JSON.stringify(payload) });
++
++export const updateNote = (id: string, payload: any) =>
++	request(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
++
++export const getBacklinks = (id: string) =>
++	request(`/notes/${encodeURIComponent(id)}/backlinks`);
++
++export const getHistory = (id: string) =>
++	request(`/notes/${encodeURIComponent(id)}/history`);
++
++export const getDiff = (id: string, from?: string, to?: string) => {
++	const params = new URLSearchParams();
++	if (from) params.set('from', from);
++	if (to) params.set('to', to);
++	return request(`/notes/${encodeURIComponent(id)}/diff?${params.toString()}`);
++};
++
++export const restoreNote = (id: string, payload: any) =>
++	request(`/notes/${encodeURIComponent(id)}/restore`, {
++		method: 'POST',
++		body: JSON.stringify(payload)
++	});
++
++export const getGraph = (id: string) =>
++	request(`/notes/${encodeURIComponent(id)}/graph`);
+diff --git a/src/routes/(app)/memory/+page.svelte b/src/routes/(app)/memory/+page.svelte
+new file mode 100644
+--- /dev/null
++++ b/src/routes/(app)/memory/+page.svelte
+@@ -0,0 +1,157 @@
++<script lang="ts">
++	import { onMount } from 'svelte';
++	import { goto } from '$app/navigation';
++	import { createNote, listNotes } from '$lib/apis/memory';
++
++	let notes: any[] = [];
++	let query = '';
++	let loading = true;
++	let error = '';
++	let seedOnly = true;
++	let typeFilter = 'all';
++
++	const load = async () => {
++		loading = true;
++		error = '';
++		try {
++			const data = await listNotes(query, 200);
++			notes = data.notes || [];
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot load memory';
++		} finally {
++			loading = false;
++		}
++	};
++
++	const create = async () => {
++		error = '';
++		try {
++			const key = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
++			const note = await createNote({
++				title: 'New note',
++				type: 'reference',
++				status: 'active',
++				body: '',
++				sources: [],
++				idempotency_key: `ui-create-${key}`
++			});
++			goto(`/memory/${note.id}`);
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot create note';
++		}
++	};
++
++	$: projectNotes = seedOnly ? notes.filter((note) => note.id.startsWith('seed-')) : notes;
++	$: types = [...new Set(projectNotes.map((note) => note.type))].sort();
++	$: visibleNotes = projectNotes.filter((note) => typeFilter === 'all' || note.type === typeFilter);
++	$: overview = layout(visibleNotes);
++
++	const layout = (items: any[]) => {
++		const nodes = items;
++		const ids = new Set(nodes.map((note) => note.id));
++		const positions: Record<string, { x: number; y: number }> = {};
++		nodes.forEach((note, index) => {
++			const angle = (2 * Math.PI * index) / Math.max(1, nodes.length) - Math.PI / 2;
++			positions[note.id] = { x: 400 + 300 * Math.cos(angle), y: 220 + 170 * Math.sin(angle) };
++		});
++		const edges: any[] = [];
++		for (const note of nodes) {
++			for (const link of note.links || []) {
++				if (ids.has(link.id)) {
++					edges.push({ source: positions[note.id], target: positions[link.id] });
++				}
++			}
++		}
++		return {
++			nodes: nodes.map((note) => ({ ...note, ...(positions[note.id] || { x: 400, y: 220 }) })),
++			edges
++		};
++	};
++
++	onMount(load);
++</script>
++
++<div class="mx-auto flex h-full w-full max-w-7xl flex-col gap-4 p-4 md:p-8">
++	<header class="flex flex-wrap items-center justify-between gap-3">
++		<div>
++			<h1 class="text-2xl font-semibold">Memory</h1>
++			<p class="text-sm text-gray-500">Linked notes shared by you and the agent.</p>
++		</div>
++		<div class="flex flex-wrap gap-2">
++			<a class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700" href="/memory/seed-chumba-map">
++				Карта Chumba
++			</a>
++			<a class="rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700" href="/memory/graph">
++				Граф
++			</a>
++			<button class="rounded-lg bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black" on:click={create}>
++				New note
++			</button>
++		</div>
++	</header>
++
++	<div class="flex flex-wrap items-center gap-3">
++		<input
++			class="min-w-[16rem] flex-1 rounded-lg border border-gray-300 bg-transparent px-3 py-2 text-sm dark:border-gray-700"
++			placeholder="Search notes..."
++			bind:value={query}
++			on:input={load}
++		/>
++		<label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
++			<input type="checkbox" bind:checked={seedOnly} />
++			только проектные seed
++		</label>
++		<select class="rounded-lg border border-gray-300 bg-transparent px-2 py-2 text-sm dark:border-gray-700" bind:value={typeFilter}>
++			<option value="all">все типы</option>
++			{#each types as item}
++				<option value={item}>{item}</option>
++			{/each}
++		</select>
++		<span class="text-xs text-gray-500">{visibleNotes.length} notes</span>
++	</div>
++
++	{#if error}
++		<div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
++			{error}
++		</div>
++	{/if}
++
++	<section class="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
++		<div class="flex flex-wrap items-center justify-between gap-3">
++			<div>
++				<h2 class="text-lg font-semibold">Карта графа</h2>
++				<p class="text-sm text-gray-500">Откройте интерактивный граф: масштаб, перетаскивание узлов, подсветка связей и переходы по узлам.</p>
++			</div>
++			<a class="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700" href="/memory/graph">Открыть граф</a>
++		</div>
++	</section>
++
++	{#if loading}
++		<p class="text-sm text-gray-500">Loading...</p>
++	{:else if visibleNotes.length === 0}
++		<p class="text-sm text-gray-500">No notes yet.</p>
++	{:else}
++		<ul class="divide-y divide-gray-200 rounded-xl border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
++			{#each visibleNotes as note (note.id)}
++				<li class="p-3">
++					<div class="flex flex-wrap items-center gap-2">
++						<a class="font-medium hover:underline" href={`/memory/${note.id}`}>{note.title}</a>
++						{#if note.id.startsWith('seed-')}
++							<span class="rounded bg-blue-100 px-1.5 text-xs text-blue-800 dark:bg-blue-900 dark:text-blue-100">seed</span>
++						{/if}
++						{#if note.updated_by?.includes('agent')}
++							<span class="rounded bg-amber-100 px-1.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-100">changed by agent</span>
++						{/if}
++					</div>
++					<div class="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
++						<span>{note.type}</span>
++						<span>{note.status}</span>
++						{#each note.links || [] as link}
++							<span>→ {link.title}</span>
++						{/each}
++					</div>
++				</li>
++			{/each}
++		</ul>
++	{/if}
++</div>
+diff --git a/src/routes/(app)/memory/[id]/+page.svelte b/src/routes/(app)/memory/[id]/+page.svelte
+new file mode 100644
+--- /dev/null
++++ b/src/routes/(app)/memory/[id]/+page.svelte
+@@ -0,0 +1,254 @@
++<script lang="ts">
++	import { page } from '$app/stores';
++	import { getDiff, getGraph, getHistory, getNote, restoreNote, updateNote } from '$lib/apis/memory';
++	import DOMPurify from 'dompurify';
++	import { marked } from 'marked';
++
++	let id = '';
++	let loadedId = '';
++	let note: any = null;
++	let title = '';
++	let body = '';
++	let type = 'reference';
++	let status = 'active';
++	let revision = '';
++	let message = '';
++	let error = '';
++	let history: any[] = [];
++	let diff = '';
++	let selectedRevision = '';
++	let graph: any = { nodes: [], edges: [] };
++	let showPreview = true;
++
++	const linkPattern = /\[\[([A-Za-z0-9_-]{1,64})(?:\|([^\]]+))?\]\]/g;
++
++	const previewBody = (value: string) =>
++		value.replace(linkPattern, (_match, target, label) => `[${label || target}](/memory/${target})`);
++
++	$: preview = DOMPurify.sanitize(marked.parse(previewBody(body)) as string);
++
++	const layout = (value: any) => {
++		const nodes = value?.nodes || [];
++		const positions: Record<string, { x: number; y: number }> = {};
++		nodes.forEach((node: any, index: number) => {
++			const angle = (2 * Math.PI * index) / Math.max(1, nodes.length) - Math.PI / 2;
++			positions[node.id] = { x: 220 + 145 * Math.cos(angle), y: 160 + 115 * Math.sin(angle) };
++		});
++		return {
++			nodes: nodes.map((node: any) => ({ ...node, ...(positions[node.id] || { x: 220, y: 160 }) })),
++			edges: (value?.edges || []).map((edge: any) => ({
++				...edge,
++				sourcePos: positions[edge.source],
++				targetPos: positions[edge.target]
++			}))
++		};
++	};
++
++	$: graphView = layout(graph);
++
++	const load = async (noteId: string) => {
++		error = '';
++		message = '';
++		try {
++			const data = await getNote(noteId);
++			note = data;
++			title = data.title;
++			body = data.body || '';
++			type = data.type || 'reference';
++			status = data.status || 'active';
++			revision = data.revision;
++			loadedId = noteId;
++			const [historyData, graphData] = await Promise.all([getHistory(noteId), getGraph(noteId)]);
++			history = historyData.history || [];
++			graph = graphData || { nodes: [], edges: [] };
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot load note';
++		}
++	};
++
++	$: if ($page.params.id && $page.params.id !== loadedId) {
++		id = $page.params.id;
++		load(id);
++	}
++
++	const save = async () => {
++		error = '';
++		message = '';
++		try {
++			const key = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
++			const data = await updateNote(id, {
++				title,
++				body,
++				type,
++				status,
++				expected_revision: revision,
++				idempotency_key: `ui-edit-${key}`
++			});
++			note = data;
++			revision = data.revision;
++			message = 'Saved';
++			const [historyData, graphData] = await Promise.all([getHistory(id), getGraph(id)]);
++			history = historyData.history || [];
++			graph = graphData || { nodes: [], edges: [] };
++		} catch (err: any) {
++			if (err?.status === 409) {
++				error = `${err.data?.message || 'Revision conflict'}. Current revision: ${err.data?.current_revision || 'unknown'}. Reloading.`;
++				await load(id);
++			} else {
++				error = err?.data?.message || 'Cannot save note';
++			}
++		}
++	};
++
++	const showDiff = async (value: string) => {
++		selectedRevision = value;
++		try {
++			const data = await getDiff(id, value, revision);
++			diff = data.diff || 'No changes in body.';
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot load diff';
++		}
++	};
++
++	const restore = async (value: string) => {
++		error = '';
++		message = '';
++		try {
++			const key = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
++			await restoreNote(id, {
++				revision: value,
++				expected_revision: revision,
++				idempotency_key: `ui-restore-${key}`
++			});
++			message = 'Revision restored as a new revision';
++			await load(id);
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot restore revision';
++		}
++	};
++</script>
++
++<div class="mx-auto flex h-full w-full max-w-6xl flex-col gap-4 p-4 md:p-8">
++	<div class="flex flex-wrap items-center justify-between gap-3">
++		<div class="flex items-center gap-3">
++			<a class="text-sm text-blue-600 hover:underline dark:text-blue-400" href="/memory">← Memory</a>
++			<a class="text-sm text-blue-600 hover:underline dark:text-blue-400" href={`/memory/graph?mode=local&center=${id}&depth=1`}>Граф</a>
++		</div>
++		<div class="flex flex-wrap items-center gap-2 text-xs text-gray-500">
++			{#if note?.id?.startsWith('seed-')}
++				<span class="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-100">seed documentation</span>
++			{/if}
++			<span>{note?.updated_by?.includes('agent') ? 'Last change by agent' : 'Last change by user'}</span>
++			{#if note?.updated_at} · {note.updated_at}{/if}
++		</div>
++	</div>
++
++	{#if error}
++		<div class="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
++			{error}
++		</div>
++	{/if}
++	{#if message}
++		<div class="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-200">
++			{message}
++		</div>
++	{/if}
++
++	{#if note}
++		<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
++			<section class="min-w-0 space-y-3">
++				<input
++					class="w-full rounded-lg border border-gray-300 bg-transparent px-3 py-2 text-xl font-semibold dark:border-gray-700"
++					bind:value={title}
++					aria-label="Note title"
++				/>
++				<div class="flex flex-wrap gap-2">
++					<select class="rounded-lg border border-gray-300 bg-transparent px-2 py-1 text-sm dark:border-gray-700" bind:value={type}>
++						{#each ['project', 'decision', 'experiment', 'issue', 'reference'] as item}
++							<option value={item}>{item}</option>
++						{/each}
++					</select>
++					<select class="rounded-lg border border-gray-300 bg-transparent px-2 py-1 text-sm dark:border-gray-700" bind:value={status}>
++						{#each ['active', 'superseded', 'archived'] as item}
++							<option value={item}>{item}</option>
++						{/each}
++					</select>
++					<button class="rounded-lg border border-gray-300 px-2 py-1 text-sm dark:border-gray-700" on:click={() => (showPreview = !showPreview)}>
++						{showPreview ? 'Edit' : 'Preview'}
++					</button>
++					<button class="rounded-lg bg-black px-3 py-1 text-sm text-white dark:bg-white dark:text-black" on:click={save}>
++						Save
++					</button>
++					<span class="self-center font-mono text-xs text-gray-400">rev {revision?.slice(0, 12)}</span>
++				</div>
++				{#if showPreview}
++					<article class="prose max-w-none rounded-xl border border-gray-200 p-4 dark:border-gray-800 dark:prose-invert">
++						{@html preview}
++					</article>
++				{:else}
++					<textarea
++						class="min-h-[24rem] w-full rounded-xl border border-gray-300 bg-transparent p-4 font-mono text-sm dark:border-gray-700"
++						bind:value={body}
++						aria-label="Note body"
++					></textarea>
++				{/if}
++				<div class="text-sm text-gray-500">
++					Links: {#each note.links || [] as link}
++						<a class="mr-2 text-blue-600 hover:underline dark:text-blue-400" href={`/memory/${link.id}`}>{link.title}</a>
++					{/each}
++				</div>
++			</section>
++
++			<aside class="space-y-4 text-sm">
++				{#if note.sources?.length}
++					<section>
++						<h2 class="mb-2 font-semibold">Sources</h2>
++						<ul class="space-y-1 break-all font-mono text-xs text-gray-600 dark:text-gray-400">
++							{#each note.sources as source}
++								<li>{source}</li>
++							{/each}
++						</ul>
++					</section>
++				{/if}
++
++				<section>
++					<h2 class="mb-2 font-semibold">Backlinks</h2>
++					{#if note.backlinks?.length}
++						<ul class="space-y-1">
++							{#each note.backlinks as link}
++								<li><a class="text-blue-600 hover:underline dark:text-blue-400" href={`/memory/${link.id}`}>{link.title}</a></li>
++							{/each}
++						</ul>
++					{:else}
++						<p class="text-gray-500">No backlinks.</p>
++					{/if}
++				</section>
++
++				<section>
++					<h2 class="mb-2 font-semibold">History</h2>
++					<ul class="space-y-1">
++						{#each history.slice().reverse() as item}
++							<li class="flex flex-wrap items-center gap-1">
++								<button class="text-left text-blue-600 hover:underline dark:text-blue-400" on:click={() => showDiff(item.revision)}>
++									{item.updated_at} · {item.updated_by}
++								</button>
++								<button class="rounded border px-1 text-xs dark:border-gray-700" on:click={() => restore(item.revision)}>restore</button>
++							</li>
++						{/each}
++					</ul>
++					{#if diff}
++						<pre class="mt-2 max-h-56 overflow-auto rounded bg-gray-100 p-2 text-xs dark:bg-gray-900">{diff}</pre>
++					{/if}
++				</section>
++
++				<section>
++					<h2 class="mb-2 font-semibold">Local graph</h2>
++					<p class="mb-2 text-xs text-gray-500">Интерактивный граф: {graph.nodes?.length || 0} узлов, {graph.edges?.length || 0} связей.</p>
++					<a class="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-700" href={`/memory/graph?mode=local&center=${id}&depth=1`}>
++						Открыть интерактивный граф
++					</a>
++				</section>
++			</aside>
++		</div>
++	{/if}
++</div>
+diff --git a/src/routes/(app)/memory/graph/+page.svelte b/src/routes/(app)/memory/graph/+page.svelte
+new file mode 100644
+--- /dev/null
++++ b/src/routes/(app)/memory/graph/+page.svelte
+@@ -0,0 +1,542 @@
++<script lang="ts">
++	import { onMount } from 'svelte';
++	import { page } from '$app/stores';
++	import { goto } from '$app/navigation';
++	import { getNote, listNotes } from '$lib/apis/memory';
++	import DOMPurify from 'dompurify';
++	import { marked } from 'marked';
++
++	const W = 1600;
++	const H = 900;
++	const PAD = 180;
++	const TYPE_COLORS: Record<string, string> = {
++		project: '#2563eb',
++		decision: '#7c3aed',
++		experiment: '#d97706',
++		issue: '#dc2626',
++		reference: '#6b7280'
++	};
++	const STATUS_COLORS: Record<string, string> = {
++		active: '#2563eb',
++		superseded: '#d97706',
++		archived: '#6b7280'
++	};
++
++	let allNotes: any[] = [];
++	let nodes: any[] = [];
++	let edges: any[] = [];
++	let positions: Record<string, { x: number; y: number }> = {};
++	let selectedTypes: string[] = [];
++	let statusFilter = 'all';
++	let seedOnly = true;
++	let query = '';
++	let mode = 'global';
++	let center = '';
++	let depth = 1;
++	let showLabels = true;
++	let showArrows = true;
++	let colorBy = 'type';
++	let repulsion = 45;
++	let linkDistance = 120;
++	let centerPull = 0.0025;
++	let zoom = 1;
++	let pan = { x: 0, y: 0 };
++	let svgEl: SVGSVGElement;
++	let hovered = '';
++	let dragging = '';
++	let moved = false;
++	let dragOffset = { x: 0, y: 0 };
++	let pointerStart = { x: 0, y: 0 };
++	let panning = false;
++	let panStart = { x: 0, y: 0 };
++	let raf = 0;
++	let autoFit = true;
++	let loaded = false;
++	let error = '';
++	let selectedId = '';
++	let selectedNote: any = null;
++	let noteError = '';
++	let showSettings = false;
++	const linkPattern = /\[\[([A-Za-z0-9_-]{1,64})(?:\|([^\]]+))?\]\]/g;
++
++	$: notePreview = DOMPurify.sanitize(
++		marked.parse((selectedNote?.body || '').replace(linkPattern, (_m, id, title) => `[${title || id}](/memory/${id})`)) as string
++	);
++
++	const selectNode = async (id: string) => {
++		selectedId = id;
++		showSettings = false;
++		noteError = '';
++		try {
++			selectedNote = await getNote(id);
++		} catch (err: any) {
++			noteError = err?.data?.message || 'Cannot load note';
++		}
++	};
++
++	const closeSelection = () => {
++		selectedId = '';
++		selectedNote = null;
++		noteError = '';
++	};
++
++	const colorOf = (note: any) =>
++		(colorBy === 'status' ? STATUS_COLORS : TYPE_COLORS)[note.status || note.type] ||
++		TYPE_COLORS[note.type] ||
++		'#6b7280';
++
++	const incomingCount = (id: string) => edges.filter((edge) => edge.target === id).length;
++
++	const refresh = () => {
++		if (!allNotes.length) return;
++		const allowed = new Set(
++			allNotes
++				.filter((note) => !seedOnly || note.id.startsWith('seed-'))
++				.filter((note) => statusFilter === 'all' || note.status === statusFilter)
++				.filter((note) => selectedTypes.length === 0 || selectedTypes.includes(note.type))
++				.filter((note) => !query || note.title.toLowerCase().includes(query.toLowerCase()))
++				.map((note) => note.id)
++		);
++
++		let ids = new Set(allowed);
++		if (mode === 'local' && center) {
++			const adjacency: Record<string, Set<string>> = {};
++			for (const note of allNotes) {
++				adjacency[note.id] = adjacency[note.id] || new Set();
++				for (const link of note.links || []) {
++					adjacency[note.id].add(link.id);
++					adjacency[link.id] = adjacency[link.id] || new Set();
++					adjacency[link.id].add(note.id);
++				}
++			}
++			ids = new Set([center]);
++			let frontier = new Set([center]);
++			for (let level = 0; level < Math.max(1, depth); level++) {
++				const next = new Set<string>();
++				for (const id of frontier) {
++					for (const other of adjacency[id] || []) {
++						if (allowed.has(other) && !ids.has(other)) {
++							ids.add(other);
++							next.add(other);
++						}
++					}
++				}
++				frontier = next;
++			}
++			ids = new Set([...ids].filter((id) => allowed.has(id)));
++			ids.add(center);
++		}
++
++		const nextNodes = allNotes
++			.filter((note) => ids.has(note.id))
++			.map((note, index) => {
++				const existing = positions[note.id];
++				const angle = (2 * Math.PI * index) / Math.max(1, ids.size) - Math.PI / 2;
++				return {
++					...note,
++					x: existing?.x ?? W / 2 + 250 * Math.cos(angle),
++					y: existing?.y ?? H / 2 + 180 * Math.sin(angle),
++					vx: 0,
++					vy: 0
++				};
++			});
++		const nextEdges: any[] = [];
++		const seen = new Set<string>();
++		for (const note of nextNodes) {
++			for (const link of note.links || []) {
++				if (!ids.has(link.id)) continue;
++				const key = `${note.id}>${link.id}`;
++				if (seen.has(key)) continue;
++				seen.add(key);
++				nextEdges.push({ source: note.id, target: link.id });
++			}
++		}
++		nodes = nextNodes;
++		edges = nextEdges;
++		autoFit = true;
++		startSimulation();
++	};
++
++	const simulate = () => {
++		let maxSpeed = 0;
++		const n = Math.max(1, nodes.length);
++		const area = W * H;
++		const k = Math.sqrt(area / n) * 0.75;
++		for (let i = 0; i < nodes.length; i++) {
++			for (let j = i + 1; j < nodes.length; j++) {
++				const a = nodes[i];
++				const b = nodes[j];
++				let dx = a.x - b.x;
++				let dy = a.y - b.y;
++				let d2 = dx * dx + dy * dy;
++				if (d2 < 1) {
++					dx = Math.random() - 0.5;
++					dy = Math.random() - 0.5;
++					d2 = 1;
++				}
++				const d = Math.sqrt(d2);
++				const force = (repulsion * k) / d2;
++				const fx = (dx / d) * force;
++				const fy = (dy / d) * force;
++				a.vx += fx;
++				a.vy += fy;
++				b.vx -= fx;
++				b.vy -= fy;
++			}
++		}
++		const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
++		for (const edge of edges) {
++			const a = byId[edge.source];
++			const b = byId[edge.target];
++			if (!a || !b) continue;
++			const dx = b.x - a.x;
++			const dy = b.y - a.y;
++			const d = Math.max(1, Math.hypot(dx, dy));
++			const force = (d - linkDistance) * 0.002;
++			const fx = (dx / d) * force;
++			const fy = (dy / d) * force;
++			a.vx += fx;
++			a.vy += fy;
++			b.vx -= fx;
++			b.vy -= fy;
++		}
++		for (const node of nodes) {
++			node.vx += (W / 2 - node.x) * centerPull;
++			node.vy += (H / 2 - node.y) * centerPull;
++			node.vx *= 0.86;
++			node.vy *= 0.86;
++			if (node.id !== dragging) {
++				node.x = Math.max(PAD, Math.min(W - PAD, node.x + node.vx));
++				node.y = Math.max(PAD, Math.min(H - PAD, node.y + node.vy));
++				positions[node.id] = { x: node.x, y: node.y };
++				maxSpeed = Math.max(maxSpeed, Math.hypot(node.vx, node.vy));
++			}
++		}
++		return maxSpeed;
++	};
++
++	const fitGraph = () => {
++		if (!nodes.length || !svgEl) return;
++		const rect = svgEl.getBoundingClientRect();
++		if (!rect.width || !rect.height) return;
++		const margin = 90;
++		const minX = Math.min(...nodes.map((node) => node.x));
++		const maxX = Math.max(...nodes.map((node) => node.x));
++		const minY = Math.min(...nodes.map((node) => node.y));
++		const maxY = Math.max(...nodes.map((node) => node.y));
++		const bw = Math.max(100, maxX - minX);
++		const bh = Math.max(100, maxY - minY);
++		const scaleX = rect.width / W;
++		const scaleY = rect.height / H;
++		const fit = Math.min((rect.width - margin) / (bw * scaleX), (rect.height - margin) / (bh * scaleY));
++		zoom = Math.max(0.3, Math.min(3.5, fit));
++		pan.x = W / 2 - ((minX + maxX) / 2) * zoom;
++		pan.y = H / 2 - ((minY + maxY) / 2) * zoom;
++	};
++
++	const startSimulation = () => {
++		cancelAnimationFrame(raf);
++		let ticks = 0;
++		let calm = 0;
++		const step = () => {
++			const speed = simulate();
++			nodes = [...nodes];
++			ticks += 1;
++			if (speed < 0.035) calm += 1;
++			else calm = 0;
++			if (ticks > 180 || (ticks > 70 && calm > 18)) {
++				raf = 0;
++				if (autoFit) {
++					fitGraph();
++					autoFit = false;
++				}
++				return;
++			}
++			raf = requestAnimationFrame(step);
++		};
++		raf = requestAnimationFrame(step);
++	};
++
++	const parseQuery = () => {
++		const params = $page.url.searchParams;
++		if (params.get('mode') === 'local') mode = 'local';
++		if (params.get('center')) center = params.get('center');
++		if (params.get('depth')) depth = Number(params.get('depth')) || 1;
++	};
++
++	const load = async () => {
++		try {
++			const data = await listNotes('', 200);
++			allNotes = data.notes || [];
++			if (!selectedTypes.length) selectedTypes = [...new Set(allNotes.map((note) => note.type))];
++			if (mode === 'local' && !center) center = allNotes.find((note) => note.id.startsWith('seed-'))?.id || allNotes[0]?.id || '';
++			parseQuery();
++			refresh();
++			loaded = true;
++		} catch (err: any) {
++			error = err?.data?.message || 'Cannot load graph';
++		}
++	};
++
++	onMount(load);
++
++	$: hoverSet = hovered
++		? new Set(
++				edges
++					.filter((edge) => edge.source === hovered || edge.target === hovered)
++					.flatMap((edge) => [edge.source, edge.target])
++			)
++		: null;
++
++	const nodeOpacity = (id: string) => (!hovered || id === hovered || hoverSet?.has(id) ? 1 : 0.12);
++	const edgeOpacity = (edge: any) =>
++		!hovered || edge.source === hovered || edge.target === hovered ? 0.45 : 0.06;
++	const nodeColor = (node: any) => colorOf(node);
++	const radius = (id: string) => Math.min(22, 7 + Math.sqrt(incomingCount(id)) * 4);
++
++	const toGraph = (event: PointerEvent) => {
++		const rect = svgEl.getBoundingClientRect();
++		const x = ((event.clientX - rect.left) * W) / rect.width;
++		const y = ((event.clientY - rect.top) * H) / rect.height;
++		return { x: (x - pan.x) / zoom, y: (y - pan.y) / zoom };
++	};
++
++	const onWheel = (event: WheelEvent) => {
++		const rect = svgEl.getBoundingClientRect();
++		const mx = ((event.clientX - rect.left) * W) / rect.width;
++		const my = ((event.clientY - rect.top) * H) / rect.height;
++		const factor = event.deltaY > 0 ? 0.9 : 1.1;
++		const next = Math.max(0.3, Math.min(3, zoom * factor));
++		pan.x = mx - ((mx - pan.x) * next) / zoom;
++		pan.y = my - ((my - pan.y) * next) / zoom;
++		zoom = next;
++	};
++
++	const onBackgroundDown = (event: PointerEvent) => {
++		if (event.button !== 0) return;
++		panning = true;
++		panStart = { x: event.clientX, y: event.clientY };
++	};
++
++	const onNodeDown = (event: PointerEvent, node: any) => {
++		if (event.button !== 0) return;
++		event.stopPropagation();
++		dragging = node.id;
++		moved = false;
++		pointerStart = { x: event.clientX, y: event.clientY };
++		const point = toGraph(event);
++		dragOffset = { x: point.x - node.x, y: point.y - node.y };
++		startSimulation();
++	};
++
++	const onMove = (event: PointerEvent) => {
++		if (dragging) {
++			const point = toGraph(event);
++			const node = nodes.find((item) => item.id === dragging);
++			if (node) {
++				if (Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > 3) moved = true;
++				node.x = point.x - dragOffset.x;
++				node.y = point.y - dragOffset.y;
++				positions[node.id] = { x: node.x, y: node.y };
++				nodes = [...nodes];
++			}
++			return;
++		}
++		if (panning) {
++			const rect = svgEl.getBoundingClientRect();
++			pan.x += ((event.clientX - panStart.x) * W) / rect.width;
++			pan.y += ((event.clientY - panStart.y) * H) / rect.height;
++			panStart = { x: event.clientX, y: event.clientY };
++		}
++	};
++
++	const onUp = (event: PointerEvent) => {
++		const dragged = dragging;
++		const wasMoved = moved;
++		if (dragged && !wasMoved) {
++			selectNode(dragged);
++		}
++		dragging = '';
++		panning = false;
++		if (dragged && wasMoved) startSimulation();
++	};
++
++	const resetView = () => {
++		fitGraph();
++	};
++</script>
++
++<div class="flex h-full min-h-0 w-full flex-1 flex-col bg-gray-50 dark:bg-gray-950">
++	<header class="flex flex-wrap items-center gap-3 border-b border-gray-200 px-4 py-2 dark:border-gray-800">
++		<a class="text-sm text-blue-600 hover:underline dark:text-blue-400" href="/memory">← Memory</a>
++		<h1 class="font-semibold">Граф памяти</h1>
++		<div class="ml-auto flex flex-wrap items-center gap-2 text-sm">
++			<select class="rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={mode} on:change={() => { if (mode === 'local' && !center) center = allNotes.find((note) => note.id.startsWith('seed-'))?.id || ''; refresh(); }}>
++				<option value="global">Общий граф</option>
++				<option value="local">Локальный граф</option>
++			</select>
++			{#if mode === 'local'}
++				<select class="max-w-[16rem] rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={center} on:change={refresh}>
++					{#each allNotes as note}
++						<option value={note.id}>{note.title}</option>
++					{/each}
++				</select>
++				<select class="rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={depth} on:change={refresh}>
++					<option value={1}>глубина 1</option>
++					<option value={2}>глубина 2</option>
++					<option value={3}>глубина 3</option>
++				</select>
++			{/if}
++			<button class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700" on:click={() => (showSettings = !showSettings)}>Настройки</button>
++			<button class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700" on:click={resetView}>Вписать</button>
++			<a class="rounded border border-gray-300 px-2 py-1 dark:border-gray-700" href="/memory">Список</a>
++		</div>
++	</header>
++
++	{#if error}
++		<div class="m-3 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</div>
++	{/if}
++
++	<div class="flex min-h-0 flex-1">
++		{#if selectedId}
++			<aside class="min-h-0 w-full overflow-auto border-r border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900 lg:w-2/3">
++				<div class="mb-3 flex items-start justify-between gap-2">
++					<div>
++						<div class="text-xs text-gray-500">Выбранная заметка</div>
++						<h2 class="text-xl font-semibold">{selectedNote?.title || selectedId}</h2>
++						<div class="mt-1 text-xs text-gray-500">
++							{selectedNote?.type} · {selectedNote?.status}
++							{#if selectedNote?.updated_by} · {selectedNote.updated_by}{/if}
++						</div>
++					</div>
++					<div class="flex gap-2">
++						<a class="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-700" href={`/memory/${selectedId}`}>Открыть</a>
++						<button class="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-700" on:click={closeSelection}>Закрыть</button>
++					</div>
++				</div>
++				{#if noteError}<p class="text-sm text-red-600">{noteError}</p>{/if}
++				{#if selectedNote}
++					<article class="prose max-w-none dark:prose-invert">{@html notePreview}</article>
++					{#if selectedNote.sources?.length}
++						<div class="mt-4 text-xs text-gray-500">Sources: {selectedNote.sources.join(' · ')}</div>
++					{/if}
++					{#if selectedNote.backlinks?.length}
++						<div class="mt-2 text-sm">Backlinks:
++							{#each selectedNote.backlinks as link}
++								<a class="mr-2 text-blue-600 hover:underline dark:text-blue-400" href={`/memory/${link.id}`}>{link.title}</a>
++							{/each}
++						</div>
++					{/if}
++				{/if}
++			</aside>
++		{/if}
++		<div class="relative min-h-0 w-full min-w-0 flex-1">
++		<svg
++			bind:this={svgEl}
++			viewBox={`0 0 ${W} ${H}`}
++			class="h-full w-full touch-none"
++			on:wheel|preventDefault={onWheel}
++			on:pointerdown={onBackgroundDown}
++			on:pointermove={onMove}
++			on:pointerup={onUp}
++			on:pointerleave={onUp}
++			role="img"
++			aria-label="Интерактивный граф заметок"
++		>
++			<defs>
++				<marker id="arrow" viewBox="0 0 10 10" refX="18" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
++					<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity="0.5" />
++				</marker>
++			</defs>
++			<g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
++				{#each edges as edge}
++					{#if nodes.find((node) => node.id === edge.source) && nodes.find((node) => node.id === edge.target)}
++						{@const source = nodes.find((node) => node.id === edge.source)}
++						{@const target = nodes.find((node) => node.id === edge.target)}
++						<line
++							x1={source.x}
++							y1={source.y}
++							x2={target.x}
++							y2={target.y}
++							stroke="currentColor"
++							stroke-width={hovered && (edge.source === hovered || edge.target === hovered) ? 2 : 1}
++							opacity={edgeOpacity(edge)}
++							marker-end={showArrows ? 'url(#arrow)' : undefined}
++							pointer-events="none"
++						/>
++					{/if}
++				{/each}
++				{#each nodes as node (node.id)}
++					<g
++						transform={`translate(${node.x} ${node.y})`}
++						opacity={nodeOpacity(node.id)}
++						on:pointerdown={(event) => onNodeDown(event, node)}
++						on:pointerenter={() => (hovered = node.id)}
++						on:pointerleave={() => (hovered = '')}
++						class="cursor-pointer"
++						role="link"
++						tabindex="0"
++						on:keydown={(event) => event.key === 'Enter' && selectNode(node.id)}
++					>
++						<circle r={radius(node.id) + 10} fill="transparent" />
++						<circle r={radius(node.id)} fill={nodeColor(node)} stroke="white" stroke-width="1.5" />
++						{#if showLabels}
++							<text y={radius(node.id) + 14} text-anchor="middle" font-size="10" fill="currentColor">
++								{node.title?.length > 30 ? node.title.slice(0, 28) + '…' : node.title}
++							</text>
++						{/if}
++					</g>
++				{/each}
++			</g>
++		</svg>
++
++		{#if showSettings}
++		<aside class="absolute right-3 top-3 max-h-[calc(100%-1.5rem)] w-72 overflow-auto rounded-xl border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/95">
++			<h2 class="mb-2 text-sm font-semibold">Настройки графа</h2>
++			<label class="mb-1 block">Поиск</label>
++			<input class="mb-2 w-full rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={query} on:input={refresh} placeholder="Фильтр по названию" />
++			<label class="mb-1 flex items-center gap-2"><input type="checkbox" bind:checked={seedOnly} on:change={refresh} /> только проектные seed</label>
++			<label class="mb-1 block">Статус</label>
++			<select class="mb-2 w-full rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={statusFilter} on:change={refresh}>
++				<option value="all">все</option>
++				<option value="active">active</option>
++				<option value="superseded">superseded</option>
++				<option value="archived">archived</option>
++			</select>
++			<div class="mb-2">
++				<div class="mb-1">Типы</div>
++				{#each [...new Set(allNotes.map((note) => note.type))] as type}
++					<label class="mr-2 inline-flex items-center gap-1"><input type="checkbox" value={type} bind:group={selectedTypes} on:change={refresh} />{type}</label>
++				{/each}
++			</div>
++			<details class="mb-2">
++				<summary class="cursor-pointer font-medium">Группы</summary>
++				<select class="mt-1 w-full rounded border border-gray-300 bg-transparent px-2 py-1 dark:border-gray-700" bind:value={colorBy}>
++					<option value="type">по типу</option>
++					<option value="status">по статусу</option>
++				</select>
++				{#each Object.entries(colorBy === 'status' ? STATUS_COLORS : TYPE_COLORS) as [group, color]}
++					<div class="mt-1 flex items-center gap-2"><span class="inline-block size-2 rounded-full" style={`background:${color}`}></span>{group}</div>
++				{/each}
++			</details>
++			<details class="mb-2">
++				<summary class="cursor-pointer font-medium">Отображение</summary>
++				<label class="mt-1 flex items-center gap-2"><input type="checkbox" bind:checked={showLabels} /> подписи</label>
++				<label class="mt-1 flex items-center gap-2"><input type="checkbox" bind:checked={showArrows} /> стрелки</label>
++				<div class="mt-1 text-gray-500">Размер узла — входящие связи.</div>
++			</details>
++			<details>
++				<summary class="cursor-pointer font-medium">Силы</summary>
++				<label class="mt-1 block">Отталкивание: {repulsion}</label>
++				<input class="w-full" type="range" min="10" max="300" step="5" bind:value={repulsion} on:input={startSimulation} />
++				<label class="mt-1 block">Длина связи: {linkDistance}</label>
++				<input class="w-full" type="range" min="60" max="220" step="5" bind:value={linkDistance} on:input={startSimulation} />
++				<label class="mt-1 block">К центру: {centerPull}</label>
++				<input class="w-full" type="range" min="0" max="0.02" step="0.001" bind:value={centerPull} on:input={startSimulation} />
++			</details>
++			<div class="mt-2 text-gray-500">{nodes.length} узлов · {edges.length} связей</div>
++		</aside>
++		{/if}
++		</div>
++	</div>
++</div>

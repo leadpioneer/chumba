@@ -1,0 +1,58 @@
+name: chumba-context-memory
+
+services:
+  trace:
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    container_name: chumba-exp-trace
+    restart: "no"
+    entrypoint: ["python"]
+    command: ["/app/trace_proxy.py"]
+    environment:
+      - UPSTREAM=http://llama-server:8080
+      - PORT=8080
+      - LOG_DIR=/data
+      - EXPECTED_SYSTEM_MARKER=SYSTEM_MARKER
+    volumes:
+      - ./trace_proxy.py:/app/trace_proxy.py:ro
+      - ../../benchmark-results/context-memory/traces:/data
+    ports:
+      - "127.0.0.1:${EXP_TRACE_PORT:-8091}:8080"
+    networks:
+      - llm_internal
+      - host_access
+
+  owui:
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    container_name: chumba-exp-owui
+    restart: "no"
+    environment:
+      - WEBUI_AUTH=true
+      - WEBUI_SECRET_KEY=exp-only-not-a-production-secret
+      - WEBUI_URL=http://127.0.0.1:${EXP_OWUI_PORT:-3001}
+      - OPENAI_API_BASE_URL=http://chumba-exp-trace:8080/v1
+      - OPENAI_API_KEY=none
+      - ENABLE_OPENAI_API=true
+      - ENABLE_WEB_SEARCH=false
+      - ENABLE_CODE_INTERPRETER=false
+      - ENABLE_COMMUNITY_SHARING=false
+      - GLOBAL_LOG_LEVEL=INFO
+    ports:
+      - "127.0.0.1:${EXP_OWUI_PORT:-3001}:8080"
+    volumes:
+      - exp-owui-data:/app/backend/data
+    networks:
+      - llm_internal
+      - host_access
+    depends_on:
+      - trace
+
+volumes:
+  exp-owui-data:
+    name: chumba-exp-owui-data
+
+networks:
+  llm_internal:
+    external: true
+    name: chumba_llm_internal
+  host_access:
+    driver: bridge

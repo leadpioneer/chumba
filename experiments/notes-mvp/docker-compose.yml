@@ -1,0 +1,81 @@
+name: chumba-notes-mvp
+
+services:
+  notes:
+    image: chumba-notes:exp
+    container_name: chumba-notes
+    restart: "no"
+    environment:
+      - NOTES_DATA_DIR=/data
+      - NOTES_INTERNAL_TOKEN=${EXP_NOTES_INTERNAL_TOKEN:?set EXP_NOTES_INTERNAL_TOKEN}
+      - NOTES_AGENT_TOKEN=${EXP_NOTES_AGENT_TOKEN:?set EXP_NOTES_AGENT_TOKEN}
+    volumes:
+      - chumba-notes-data:/data
+    ports:
+      - "127.0.0.1:8089:8080"
+    networks:
+      - llm_internal
+      - host_access
+
+  trace:
+    image: ghcr.io/open-webui/open-webui@sha256:8b432fe0a65b91116afc7961365c6cca5379cc923171386a96691f3471f3cae9
+    container_name: chumba-exp-trace
+    restart: "no"
+    entrypoint: ["python"]
+    command: ["/app/trace_proxy.py"]
+    environment:
+      - UPSTREAM=http://llama-server:8080
+      - PORT=8080
+      - LOG_DIR=/data
+      - EXPECTED_SYSTEM_MARKER=SYSTEM_MARKER
+    volumes:
+      - ../context-memory/trace_proxy.py:/app/trace_proxy.py:ro
+      - ../../benchmark-results/context-memory/traces:/data
+    ports:
+      - "127.0.0.1:8091:8080"
+    networks:
+      - llm_internal
+      - host_access
+
+  owui:
+    image: chumba-open-webui-notes:exp
+    container_name: chumba-notes-owui
+    restart: "no"
+    environment:
+      - WEBUI_AUTH=true
+      - WEBUI_SECRET_KEY=${EXP_WEBUI_SECRET_KEY:?set EXP_WEBUI_SECRET_KEY}
+      - WEBUI_URL=http://127.0.0.1:3001
+      - ENABLE_VERSION_UPDATE_CHECK=false
+      - OPENAI_API_BASE_URL=http://chumba-exp-trace:8080/v1
+      - OPENAI_API_KEY=none
+      - ENABLE_OPENAI_API=true
+      - NOTES_API_URL=http://chumba-notes:8080
+      - NOTES_INTERNAL_TOKEN=${EXP_NOTES_INTERNAL_TOKEN:?set EXP_NOTES_INTERNAL_TOKEN}
+      - MCP_INITIALIZE_TIMEOUT=30
+      - CHAT_RESPONSE_MAX_TOOL_CALL_ITERATIONS=12
+      - ENABLE_WEB_SEARCH=false
+      - ENABLE_CODE_INTERPRETER=false
+      - ENABLE_COMMUNITY_SHARING=false
+    ports:
+      - "127.0.0.1:3001:8080"
+    volumes:
+      - chumba-notes-owui-data:/app/backend/data
+    networks:
+      - llm_internal
+      - host_access
+    depends_on:
+      - trace
+      - notes
+
+volumes:
+  chumba-notes-data:
+    name: chumba-notes-data
+  chumba-notes-owui-data:
+    name: chumba-notes-owui-data
+
+networks:
+  llm_internal:
+    external: true
+    name: chumba_llm_internal
+  host_access:
+    driver: bridge

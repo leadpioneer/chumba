@@ -6,3 +6,7 @@ logs/
 *.log
 __pycache__/
 searxng/core-config/
+benchmark-results/
+experiments/context-profiles/context-exp.env
+
+.kilo/
