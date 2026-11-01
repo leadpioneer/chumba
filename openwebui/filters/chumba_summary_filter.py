@@ -33,22 +33,9 @@ class Filter:
     # ---------- вспомогательное ----------
 
     def _tokenize(self, text: str) -> int:
-        try:
-            base = self.valves.llama_url.rstrip("/")
-            if base.endswith("/v1"):
-                base = base[:-3]
-            req = urllib.request.Request(
-                base + "/tokenize",
-                data=json.dumps({"content": text}).encode("utf-8"),
-                method="POST",
-            )
-            req.add_header("Content-Type", "application/json")
-            resp = urllib.request.urlopen(req, timeout=60)
-            tokens = json.loads(resp.read().decode("utf-8", "replace")).get("tokens")
-            if isinstance(tokens, list):
-                return len(tokens)
-        except Exception:
-            pass
+        # Грубая оценка, как и везде в стеке: порог — настройка, а не точность.
+        # Раньше здесь был синхронный POST в llama-server, который будил спящую
+        # модель и ставил чат в очередь до 60 с.
         return len(text) // 4
 
     def _cache(self) -> dict:

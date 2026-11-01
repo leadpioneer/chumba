@@ -15,7 +15,7 @@ from e2e_loop import load_env, mcp_call  # noqa: E402
 
 
 def main():
-    load_env()
+    cfg = load_env()
     marker = "LEAK_MARKER_" + uuid.uuid4().hex[:8]
     task = (
         f"Меня зовут Иван Петров, мой приватный токен {marker}. "
@@ -23,7 +23,12 @@ def main():
     )
     print("MARKER=" + marker)
 
-    text = mcp_call("http://127.0.0.1:8086/mcp", "", "delegate_to_worker", {"task": task})
+    text = mcp_call(
+        "http://127.0.0.1:8086/mcp",
+        cfg.get("DELEGATE_MCP_TOKEN", ""),
+        "delegate_to_worker",
+        {"task": task},
+    )
     parsed = json.loads(text)
     print("delegate_status:", "error" if "error" in parsed else "ok")
 

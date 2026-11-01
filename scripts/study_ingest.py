@@ -30,7 +30,6 @@ from e2e_loop import load_env  # noqa: E402
 
 BASE = os.environ.get("WEBUI_BASE", "http://127.0.0.1:3000")
 SYLLABUS_FILE = Path("study/syllabus.json")
-DEFAULT_DOCS_DIR = r"C:\Users\Ilya\Desktop\Учёба\Системный анализ"
 
 
 def req(method, path, token=None, body=None, timeout=120):
@@ -141,7 +140,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_env()
-    docs_dir = Path(args.dir or cfg.get("STUDY_DOCS_DIR") or DEFAULT_DOCS_DIR)
+    docs_dir = Path(args.dir or cfg.get("STUDY_DOCS_DIR") or "")
     knowledge_name = cfg.get("STUDY_KNOWLEDGE_NAME") or "Системный анализ"
 
     if not docs_dir.is_dir():

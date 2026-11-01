@@ -207,6 +207,7 @@ services:
       - DELEGATE_SANITIZE_MODEL=orchestrator
       - DELEGATE_SANITIZE_MAX_CHARS=${DELEGATE_SANITIZE_MAX_CHARS:-300}
       - DELEGATE_SANITIZE_FAIL=${DELEGATE_SANITIZE_FAIL:-reject}
+      - DELEGATE_MCP_TOKEN=${DELEGATE_MCP_TOKEN:?set DELEGATE_MCP_TOKEN}
       - OUTBOUND_LOG_DIR=/logs/outbound
     volumes:
       - ./logs:/logs
@@ -218,7 +219,7 @@ services:
 
   # Публикация host-порта delegate (internal-only) через socat.
   delegate-port:
-    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
     container_name: chumba-delegate-port
     restart: unless-stopped
     command: TCP-LISTEN:8000,fork,reuseaddr TCP:delegate:8000
@@ -240,6 +241,7 @@ services:
       - STUDY_DB_PATH=/data/study.db
       - STUDY_SYLLABUS_PATH=/app/syllabus.json
       - STUDY_RETIRE_STREAK=${STUDY_RETIRE_STREAK:-3}
+      - STUDY_MCP_TOKEN=${STUDY_MCP_TOKEN:?set STUDY_MCP_TOKEN}
     volumes:
       - ./study/syllabus.json:/app/syllabus.json:ro
       - study-data:/data
@@ -248,7 +250,7 @@ services:
 
   # Публикация host-порта study (internal-only) через socat.
   study-port:
-    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
     container_name: chumba-study-port
     restart: unless-stopped
     command: TCP-LISTEN:8000,fork,reuseaddr TCP:study:8000
@@ -347,7 +349,7 @@ services:
 
   # Публикация host-порта Open WebUI (internal-only) через socat.
   openwebui-port:
-    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
     container_name: chumba-openwebui-port
     restart: unless-stopped
     command: TCP-LISTEN:8080,fork,reuseaddr TCP:open-webui:8080
@@ -387,7 +389,7 @@ services:
       - "8080"
 
   embeddings-port:
-    image: ${SOCAT_IMAGE:-alpine/socat:latest}
+    image: ${SOCAT_IMAGE:-alpine/socat@sha256:5ffbd6ae916cbad86a58fabe0d6d5a6fd5c2b47ddf031e82996baac9300e732f}
     container_name: chumba-embeddings-port
     restart: unless-stopped
     command: TCP-LISTEN:8080,fork,reuseaddr TCP:embeddings:8080

@@ -17,6 +17,7 @@ DELEGATE_MCP_URL = "http://127.0.0.1:8086/mcp"
 def main():
     cfg = load_env()
     search_token = cfg.get("SEARCH_MCP_TOKEN", "")
+    delegate_token = cfg.get("DELEGATE_MCP_TOKEN", "")
     marker = "LEAK_MARKER_" + uuid.uuid4().hex[:8]
     print("MARKER=" + marker)
 
@@ -67,7 +68,7 @@ def main():
                 result = mcp_call(SEARCH_MCP_URL, search_token, name[len("search_"):], args)
             elif name.startswith("delegate_"):
                 delegate_calls += 1
-                result = mcp_call(DELEGATE_MCP_URL, "", name[len("delegate_"):], args)
+                result = mcp_call(DELEGATE_MCP_URL, delegate_token, name[len("delegate_"):], args)
             else:
                 result = json.dumps({"error": f"unknown tool {name}"})
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})

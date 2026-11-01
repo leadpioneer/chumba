@@ -6,20 +6,12 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from mcp_client import load_env  # noqa: E402
 
 BASE = os.environ.get("WEBUI_BASE", "http://127.0.0.1:3000")
-
-
-def load_env(path=".env"):
-    cfg = {}
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            cfg[key] = value
-    return cfg
 
 
 def req(method, path, token=None, body=None, timeout=420):

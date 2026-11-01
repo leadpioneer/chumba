@@ -17,15 +17,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from e2e_loop import load_env, mcp_call  # noqa: E402
 
 STUDY_MCP_URL = os.environ.get("STUDY_MCP_URL", "http://127.0.0.1:8088/mcp")
+STUDY_TOKEN = ""
 SELFTEST_TOPIC = "__selftest__"
 
 
 def call(tool, args):
-    return mcp_call(STUDY_MCP_URL, "", tool, args)
+    return mcp_call(STUDY_MCP_URL, STUDY_TOKEN, tool, args)
 
 
 def main():
-    load_env()  # проверяем, что .env читается (сервису study секреты не нужны)
+    cfg = load_env()
+    global STUDY_TOKEN
+    STUDY_TOKEN = cfg.get("STUDY_MCP_TOKEN", "")
 
     print("study_record ...")
     question = "selftest-" + uuid.uuid4().hex[:8]

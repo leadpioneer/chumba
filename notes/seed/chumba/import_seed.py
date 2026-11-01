@@ -17,7 +17,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-GIT_REV = "6039cf4e795a3e7b50a5a82e35d469815eb87616"
 LINK_RE = re.compile(r"\[\[([A-Za-z0-9_-]{1,64})(?:\|[^\]]+)?\]\]")
 SECRET_RE = re.compile(r"(?i)(sk-[A-Za-z0-9_-]{16,}|bearer\s+[A-Za-z0-9._-]{20,}|(?:api[_-]?key|secret|password|token)\s*=\s*[^\s]+)")
 ROOT_ID = "seed-chumba-map"

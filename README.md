@@ -23,6 +23,7 @@
 11. [Компоненты и лицензии](#11-компоненты-и-лицензии)
 12. [Структура репозитория](#12-структура-репозитория)
 13. [Ограничения и планы](#13-ограничения-и-планы)
+14. [Память: linked notes внутри Chumba](#14-память-linked-notes-внутри-chumba)
 
 ---
 
@@ -92,9 +93,9 @@
 | searxng | 8888 | Поиск: `/search?q=...&format=json` |
 | litellm | 4000 | Алиасы `worker` / `worker-local` / `orchestrator` |
 | search-mcp | 8085 | MCP: `searxng_web_search`, `web_url_read` (Bearer) |
-| delegate | 8086 | MCP: `delegate_to_worker(task, urls, max_sources)` |
+| delegate | 8086 | MCP: `delegate_to_worker(task, urls, max_sources)` (Bearer) |
 | embeddings | 8087 | Локальные эмбеддинги bge-m3 (CPU) для RAG |
-| study | 8088 | MCP: `study_topics/plan/due/record/progress/task` (учебный прогресс, локально) |
+| study | 8088 | MCP: `study_topics/plan/due/record/progress/task` (учебный прогресс, локально; Bearer) |
 | byparr | — | Stealth-браузер (Camoufox) для чтения страниц; только `egress` |
 | tor | 9050 | SOCKS5 для SearXNG; профиль `tor`, по умолчанию выключен |
 
@@ -123,6 +124,7 @@ Copy-Item .env.example .env
 ```
 
 Обязательно заполнить: `SEARXNG_SECRET`, `LITELLM_MASTER_KEY`, `SEARCH_MCP_TOKEN`,
+`DELEGATE_MCP_TOKEN`, `STUDY_MCP_TOKEN`, `NOTES_INTERNAL_TOKEN`, `NOTES_AGENT_TOKEN`,
 `WEBUI_SECRET_KEY`, `WEBUI_ADMIN_EMAIL` / `WEBUI_ADMIN_PASSWORD` и блок воркера
 (`WORKER_MODEL=openai/<provider>/<model-id>`, `WORKER_BASE_URL`, `WORKER_API_KEY`).
 Секреты генерируются как случайная hex-строка 32–64 символов.
@@ -136,8 +138,8 @@ Copy-Item .env.example .env
 powershell -File scripts\download-embedding-model.ps1
 ```
 
-Если меняете имя файла оркестратора — синхронизируйте путь в `llama/models.ini` (секция
-`[orchestrator]`) и `ORCHESTRATOR_MODEL_FILE` в `.env`.
+Если меняете имя файла оркестратора — поправьте путь в `llama/models.ini`
+(секция `[orchestrator]`).
 
 ### 4.4 Запуск и первый вход
 
@@ -145,6 +147,10 @@ powershell -File scripts\download-embedding-model.ps1
 docker compose up -d
 docker compose ps
 ```
+
+Или в один клик: `start.bat` (запуск всего стека, при необходимости сам запускает
+Docker Desktop) и `stop.bat` (остановка: модель выгружается из VRAM/RAM, данные
+в томах сохраняются).
 
 - Первый запуск скачивает образы (несколько ГБ) и загружает модель (~90 с).
 - Интерфейс: http://127.0.0.1:3000. Админ создаётся автоматически из `.env`
@@ -321,7 +327,8 @@ python scripts\webui_add_tutor_model.py  # модель chumba-tutor + прив�
 
 Сырые страницы никогда не попадают в контекст оркестратора: их читает `delegate` и возвращает
 сжатый JSON ≤800 токенов. Поисковая выдача обрезается до 4 результатов, каждый сниппет — до
-600 символов, страницы — до `URL_READ_MAX_CHARS`.
+600 символов, страницы — до `URL_READ_MAX_CHARS`. Страницы читаются по порядку выдачи, пока
+не наберётся нужное число читаемых: закрытая антиботом ссылка не выбрасывает следующие годные.
 
 ---
 
@@ -349,6 +356,8 @@ user:   "Задача: <обезличенный запрос>\n\nМатериа
 - `DELEGATE_SANITIZE_FAIL=reject` — при сбое рерайта задача в облако **не** отправляется.
 - `DELEGATE_SANITIZE_MAX_CHARS=300` — предел длины обезличенного запроса.
 - Отключение: `DELEGATE_SANITIZE=off`.
+- Любое другое значение — ошибка при старте сервиса: опечатка не должна молча
+  превращаться в отключение обезличивания (fail closed).
 
 Описание инструмента `delegate_to_worker` дополнительно требует от оркестратора обезличенных
 формулировок (видно модели в схеме инструмента). Проверка: `python scripts\sanitize_check.py`
@@ -358,8 +367,8 @@ user:   "Задача: <обезличенный запрос>\n\nМатериа
 
 `logs/outbound/worker-YYYYMMDD.jsonl` — каждый вызов целиком: исходная и обезличенная задача,
 URL, полный промпт и ответ, `status`, `search_path`, `explicit_urls`, тайминги. Пишутся все
-исходы: `ok`, `sanitize_failed`, `no_results`, `search_failed`. Дублирование запросов —
-в логах `litellm`.
+исходы: `ok`, `sanitize_failed`, `no_results`, `search_failed`. Файлы старше 90 дней удаляются
+автоматически. Дублирование запросов — в логах `litellm`.
 
 ### 7.4 Проверка утечек
 
@@ -423,7 +432,12 @@ curl.exe "http://127.0.0.1:8888/search?q=test&format=json"
 $tok = ((Get-Content .env | Where-Object { $_ -like 'SEARCH_MCP_TOKEN=*' }) -split '=',2)[1].Trim()
 $env:MCP_TOKEN = $tok
 python scripts\check_mcp.py http://127.0.0.1:8085/mcp list
+$tok = ((Get-Content .env | Where-Object { $_ -like 'DELEGATE_MCP_TOKEN=*' }) -split '=',2)[1].Trim()
+$env:MCP_TOKEN = $tok
 python scripts\check_mcp.py http://127.0.0.1:8086/mcp call delegate_to_worker '@scripts/delegate-args.json'
+$tok = ((Get-Content .env | Where-Object { $_ -like 'STUDY_MCP_TOKEN=*' }) -split '=',2)[1].Trim()
+$env:MCP_TOKEN = $tok
+python scripts\check_mcp.py http://127.0.0.1:8088/mcp list
 Remove-Item Env:\MCP_TOKEN
 
 # Эмбеддинги
@@ -434,6 +448,7 @@ python scripts\embed_check.py
 
 | Скрипт | Назначение |
 |---|---|
+| `mcp_client.py` | общий MCP-клиент (Streamable HTTP) для остальных скриптов |
 | `check_mcp.py` | список/вызов инструментов любого MCP (raw Streamable HTTP) |
 | `e2e_loop.py [model] [prompt]` | сквозной цикл «оркестратор → tool_calls → ответ» |
 | `leak_check.py` | маркерный тест утечек через UI-путь |
@@ -446,7 +461,7 @@ python scripts\embed_check.py
 | `epmc_check.py [query]` | проверка запасного поиска Europe PMC REST |
 | `webui_smoke.py` | вход админом, список моделей, конфиг tool servers |
 | `webui_chat_test.py` | чат через API Open WebUI с MCP-инструментами |
-| `webui_add_mcp.py` | MCP-подключения (search + delegate) |
+| `webui_add_mcp.py` | MCP-подключения (search + delegate + study) |
 | `webui_rag_config.py` | RAG-настройки (движок, TOP_K) |
 | `webui_add_filter.py` | установка/активация фильтра summary (+Valves) |
 | `webui_add_model.py` | создание/обновление `chumba-orchestrator` + DEFAULT_MODELS |
@@ -456,6 +471,10 @@ python scripts\embed_check.py
 | `download-embedding-model.ps1` | скачать `bge-m3-Q8_0.gguf` |
 
 JSON-фикстуры (`scripts/*.json`) — тела запросов для `curl` и аргументы инструментов.
+
+Юнит-тесты (без сети и GPU): `python delegate\test_app.py` (санитайзер fail-closed,
+выбор читаемых источников, парсинг JSON) и `python notes\test_storage.py` (заметки:
+revision-конфликты, идемпотентность, восстановление).
 
 ---
 
@@ -492,7 +511,7 @@ docker compose down -v         # ВНИМАНИЕ: удалит и тома (ч�
 1. `docker compose pull` → `docker compose up -d`.
 2. Проверьте: `docker compose ps`, health-эндпоинты (см. §8.1), `python scripts\e2e_loop.py`.
 3. При обновлении Open WebUI-образа настройки в томе сохраняются; если том пересоздан —
-   прогоните четыре `webui_add_*.py` из §4.5.
+   прогоните `webui_add_*.py` из §4.5.
 
 ---
 
@@ -508,6 +527,9 @@ docker compose down -v         # ВНИМАНИЕ: удалит и тома (ч�
   в стеке это обойдено socat-форвардерами, не убирайте их.
 - **`403 Invalid Host header` от search-mcp** — hardened-режим проверяет Host; добавьте нужный
   `host:port` в `MCP_HTTP_ALLOWED_HOSTS`.
+- **`401 unauthorized` от MCP-сервиса (delegate/study)** — токен не задан или не совпадает:
+  проверьте `DELEGATE_MCP_TOKEN`/`STUDY_MCP_TOKEN` в `.env` и перезапустите сервис;
+  для UI-подключений — прогоните `python scripts\webui_add_mcp.py`.
 - **Воркер отвечает `401/404`** — проверьте `WORKER_BASE_URL`, `WORKER_API_KEY`, `WORKER_MODEL`
   (префикс `openai/` обязателен; id — как ждёт роутер).
 - **Модель не влезает в VRAM** — уменьшите `ORCHESTRATOR_CTX` (32768 → 24576/16384) или
@@ -546,6 +568,7 @@ docker compose down -v         # ВНИМАНИЕ: удалит и тома (ч�
 
 ```
 docker-compose.yml          # весь стек (сервисы, тома, socat-форвардеры портов)
+start.bat / stop.bat        # запуск/остановка всего стека в один клик
 .env.example                # контракт переменных; копируется в .env (секреты)
 models/                     # GGUF оркестратора
 models/embeddings/          # bge-m3-Q8_0.gguf (RAG)
@@ -557,10 +580,11 @@ searxng/
 litellm/config.yaml         # алиасы worker / worker-local / orchestrator
 delegate/                   # FastMCP-сервис delegate_to_worker (поиск, чтение, санитайзер, JSONL)
 study/                      # FastMCP-сервис учебного прогресса + study/syllabus.json (репетитор)
+notes/                      # FastMCP-сервис linked notes (Markdown + SQLite FTS5) + seed
 openwebui/filters/          # chumba_summary_filter.py (rolling summary)
 testdata/                   # тестовый документ для RAG
 scripts/                    # тесты и провижининг (см. §8.2)
-logs/outbound/              # журнал всего исходящего к воркеру (аудит)
+logs/outbound/              # журнал всего исходящего к воркеру (аудит, ротация 90 дней)
 docs/marketing.md           # маркетинговое описание
 docs/decisions.md           # журнал инженерных решений и замеров
 ```
@@ -585,7 +609,7 @@ docs/decisions.md           # журнал инженерных решений �
 дополнительный поисковый путь; obfs4/webtunnel-образ для Tor; onion-доступ к UI.
 
 
-## 8. Память: linked notes внутри Chumba
+## 14. Память: linked notes внутри Chumba
 
 Основной запуск включает notes-сервис и patched Open WebUI. Сборка
 воспроизводимая: `openwebui/Dockerfile` скачивает pinned upstream source,

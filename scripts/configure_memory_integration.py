@@ -56,16 +56,16 @@ def wait_health() -> None:
     raise SystemExit(f"OWUI did not become healthy: {last}")
 
 
-def login() -> str:
+def login() -> str | None:
     wait_health()
+    if not EMAIL or not PASSWORD:
+        raise SystemExit("WEBUI_ADMIN_EMAIL/WEBUI_ADMIN_PASSWORD are required")
     last = None
     for _ in range(20):
-        if not EMAIL or not PASSWORD:
-            raise SystemExit("WEBUI_ADMIN_EMAIL/WEBUI_ADMIN_PASSWORD are required")
         status, data = req("POST", "/api/v1/auths/signin", body={"email": EMAIL, "password": PASSWORD})
         if status == 200 and isinstance(data, dict) and data.get("token"):
             return data["token"]
-        # First boot on a fresh volume: create the configured admin.
+        # Первый запуск на свежем томе: админ ещё не создан — создаём.
         status, data = req(
             "POST",
             "/api/v1/auths/signup",
@@ -73,6 +73,15 @@ def login() -> str:
         )
         if status == 200 and isinstance(data, dict) and data.get("token"):
             return data["token"]
+        # Аккаунт уже существует, а пароль из .env не подходит: пароль был
+        # сменён в UI после первого запуска, тогда же применился и конфиг.
+        if status in (400, 409) and ("already" in str(data).lower() or "exist" in str(data).lower()):
+            print(
+                "OWUI admin already exists, but the password from .env does not match. "
+                "The password was likely changed in the UI after first boot; the notes "
+                "config was applied then. Skipping."
+            )
+            return None
         last = (status, data)
         time.sleep(2)
     raise SystemExit(f"admin auth failed: {last}")
@@ -145,6 +154,8 @@ def import_seeds(token: str) -> None:
 
 def main() -> int:
     token = login()
+    if token is None:
+        return 0
     configure_mcp(token)
     import_seeds(token)
     return 0

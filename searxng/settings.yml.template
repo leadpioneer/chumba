@@ -16,7 +16,7 @@ search:
     - json
 
 server:
-  limiter: false
+  limiter: true
   image_proxy: false
 
 ui:

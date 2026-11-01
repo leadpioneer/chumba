@@ -9,6 +9,7 @@
 История чата, системный промпт оркестратора и файлы сюда не попадают.
 """
 
+import hmac
 import json
 import os
 import re
@@ -19,7 +20,10 @@ from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 SEARCH_MCP_URL = os.environ.get("SEARCH_MCP_URL", "http://search-mcp:8080/mcp")
 SEARCH_MCP_TOKEN = os.environ.get("SEARCH_MCP_TOKEN", "")
@@ -38,10 +42,23 @@ LOG_DIR = Path(os.environ.get("OUTBOUND_LOG_DIR", "/logs/outbound"))
 HTTP_TIMEOUT = float(os.environ.get("DELEGATE_HTTP_TIMEOUT", "180"))
 # Санитайзер: локальный рерайт задачи перед отправкой в облако.
 SANITIZE_MODE = os.environ.get("DELEGATE_SANITIZE", "llm").strip().lower()
+if SANITIZE_MODE not in ("llm", "off"):
+    # Неизвестное значение нельзя трактовать как "off": это молча отключает
+    # обезличивание и отправляет исходную задачу в облако. Fail closed.
+    raise SystemExit(f"DELEGATE_SANITIZE must be 'llm' or 'off', got {SANITIZE_MODE!r}")
 SANITIZE_URL = os.environ.get("DELEGATE_SANITIZE_URL", "http://llama-server:8080/v1")
 SANITIZE_MODEL = os.environ.get("DELEGATE_SANITIZE_MODEL", "orchestrator")
 SANITIZE_MAX_CHARS = int(os.environ.get("DELEGATE_SANITIZE_MAX_CHARS", "300"))
 SANITIZE_FAIL = os.environ.get("DELEGATE_SANITIZE_FAIL", "reject").strip().lower()
+
+# Токен для MCP-эндпоинта: сервис открыт на 127.0.0.1:8086 и тратит деньги
+# облачного воркера, поэтому без авторизации его дёргал бы любой локальный процесс.
+DELEGATE_MCP_TOKEN = os.environ.get("DELEGATE_MCP_TOKEN", "")
+if not DELEGATE_MCP_TOKEN:
+    raise SystemExit("DELEGATE_MCP_TOKEN is required")
+
+# Журнал всего исходящего растёт бесконечно; храним N дней, старее удаляем.
+LOG_RETENTION_DAYS = 90
 
 # Грубая оценка: ~4 символа на токен. Позволяет жёстко и предсказуемо
 # ограничивать контекст без зависимости от конкретного токенизатора.
@@ -74,8 +91,22 @@ def read_url_candidates(url: str) -> list[str]:
 mcp = FastMCP(
     "chumba-delegate",
     instructions="Делегирование узких поисковых задач воркеру (cloud или local).",
-    host="0.0.0.0",
-    port=8000,
+)
+
+# OWUI ходит по имени сервиса (delegate:8000) — hostname не из дефолтного
+# allowlist [localhost, 127.0.0.1], поэтому без списка сервис отвечает 421.
+mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        "delegate:8000",
+        "chumba-delegate:8000",
+        "delegate",
+        "chumba-delegate",
+        "127.0.0.1:8000",
+        "127.0.0.1:8086",
+        "localhost:8000",
+        "localhost:8086",
+    ],
 )
 
 WORKER_SYSTEM = (
@@ -304,6 +335,10 @@ def extract_json(text: str) -> dict:
 def log_outbound(record: dict) -> None:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+        for old in LOG_DIR.glob("worker-*.jsonl"):
+            if old.is_file() and old.stat().st_mtime < cutoff:
+                old.unlink(missing_ok=True)
         path = LOG_DIR / f"worker-{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl"
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -399,8 +434,14 @@ async def delegate_to_worker(task: str, urls: list[str] | None = None, max_sourc
                 )
                 return json.dumps({"error": "no search results"}, ensure_ascii=False)
 
+        # Читаем по порядку, пока не наберётся n_read читаемых страниц: если
+        # верхние результаты закрыты антиботом, воркер получает следующие
+        # читаемые, а не пустые тексты топ-выдачи.
         extras = {}
+        chosen: list[dict] = []
         for item in results:
+            if len(chosen) >= n_read:
+                break
             text = ""
             err = ""
             for candidate in read_url_candidates(item["url"]):
@@ -417,9 +458,10 @@ async def delegate_to_worker(task: str, urls: list[str] | None = None, max_sourc
             extras[item["url"]] = clip_chars(text, URL_READ_MAX_CHARS // 4)
             if not text:
                 print(f"read failed {item['url']}: {err}", flush=True)
+                continue
+            chosen.append(item)
 
         budget = MAX_SOURCE_TOKENS * 4
-        chosen = results[:n_read]
         per_source = max(400, (budget - sum(len(m["snippet"]) for m in chosen)) // max(1, len(chosen)))
         blocks = []
         for idx, item in enumerate(chosen, 1):
@@ -489,5 +531,43 @@ async def delegate_to_worker(task: str, urls: list[str] | None = None, max_sourc
     return json.dumps(out, ensure_ascii=False)
 
 
+class BearerAuthMiddleware:
+    """Один bearer-токен на все пути (как в notes): сервис тратит деньги
+    облачного воркера, поэтому чужому локальному процессу сюда нельзя."""
+
+    def __init__(self, app: ASGIApp, token: str):
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        auth = headers.get("authorization", "")
+        got = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not got or not hmac.compare_digest(got, self.token):
+            payload = json.dumps({"error": "unauthorized"}).encode("utf-8")
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(payload)).encode()),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": payload})
+            return
+        await self.app(scope, receive, send)
+
+
+app = mcp.streamable_http_app()
+app.add_middleware(BearerAuthMiddleware, token=DELEGATE_MCP_TOKEN)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
