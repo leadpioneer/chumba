@@ -1,6 +1,6 @@
 # ADR 0001: Linked notes MVP storage and UI integration
 
-Status: **Accepted and implemented in the experimental MVP**  
+Status: **Accepted and implemented; the memory image is the default launch since 2026-11-01**  
 Date: 2026-10-31; implementation verified 2026-11-01
 
 ## Context
@@ -190,4 +190,6 @@ remote access, Basic Memory adoption.
    unauthorized access rejected.
 
 The reproducible patch is `experiments/notes-mvp/owui-memory.patch` with its
-checksum in the notes MVP results document. The working image was not replaced.
+checksum in the notes MVP results document. Since 2026-11-01 the memory build
+is the default `open-webui` image; the pinned upstream digest remains the
+rollback target via `OPENWEBUI_MEMORY_IMAGE`.
