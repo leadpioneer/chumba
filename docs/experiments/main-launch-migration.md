@@ -78,3 +78,36 @@ Remove only after explicit backup approval.
 - Notes MCP is explicit-only; no automatic memory injection.
 - Working compaction policy remains the legacy filter; built-in compaction and
   budget guard remain experimental/off.
+
+
+## Final verification (2026-11-01)
+
+- Main compose is running: `chumba-open-webui` healthy, `chumba-notes`
+  healthy, `chumba-llama-server` healthy.
+- `docker compose up -d --build open-webui notes notes-config` built both local
+  images and started the one-shot `notes-config`; it exited 0.
+- `notes-config` added/updated the `mcp-notes` tool server connection and
+  imported all 25 seed notes unchanged.
+- Authenticated proxy check returned 29 notes; tool server list contains
+  `mcp-search`, `mcp-delegate`, `mcp-study`, `mcp-notes`.
+- Commit with the complete pilot/migration: `80ac7ca18956e3e0da46eb6a3fadcfbe161d5284`;
+  pushed to `origin/main`.
+- Working compaction and guard policy were not changed. The experimental
+  `chumba_summary` filter remains the active working policy; built-in
+  compaction/guard remain off.
+- Main UI URLs use port 3000; the notes service has no host port.
+- `.env` (tokens), `benchmark-results`, volumes and backups are ignored by git.
+- Docker may warn once that the existing `chumba-notes-data` volume was created
+  by the old experimental compose project; the main stack reuses it. Do not run
+  `docker compose down -v` if the notes volume must be preserved.
+
+## Screenshots
+
+- `docs/experiments/screenshots/memory-graph-fit-final.png`
+- `docs/experiments/screenshots/memory-graph-split-final-2.png`
+- `docs/experiments/screenshots/memory-page-launcher.png`
+- `docs/experiments/screenshots/memory-root-map.png`
+- `docs/experiments/screenshots/memory-note-diff.png`
+- `docs/experiments/screenshots/memory-project-backlinks-graph.png`
+- `docs/experiments/screenshots/guard-oversized-error.png`
+- `docs/experiments/screenshots/guard-tool-overflow.png`
